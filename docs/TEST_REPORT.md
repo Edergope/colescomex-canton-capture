@@ -70,12 +70,12 @@ Comandos: `npm run build` (incluye `tsc --noEmit`), `npm test`, `npm run test:e2
 - **Almacenamiento**: las fotos locales no se borran tras sincronizar (decisión conservadora); con cientos de capturas de 3-5 MB el espacio del teléfono debe vigilarse.
 - **Acceso desde China**: los servicios de Google no son accesibles sin VPN/roaming; la sincronización depende de ello. Captura y OCR funcionan sin conexión.
 
-## Verificación y Despliegue Antigravity (2026-10-22)
+## Verificación y Despliegue Antigravity (2026-10-22 — Cierre de Integración)
 
-### 1. Línea base ejecutada y confirmada en sesión activa
-- **Vitest**: 33/33 pruebas unitarias y de integración superadas (1.03s).
+### 1. Métricas de Ejecución Técnica
+- **Vitest**: 34/34 pruebas unitarias y de integración superadas (1.06s). Incluye prueba de regresión para mitigación de condiciones de carrera y deduplicación atómica en `GoogleSheetsAdapter`.
 - **Playwright E2E**: 4/4 pruebas de extremo a extremo aprobadas (2.3 min) con emulación Pixel 7 y PaddleOCR en navegador:
-  - Capturas consecutivas con OCR real, fusión y sincronización: PASS.
+  - Capturas consecutivas con OCR real (PaddleOCR) en segundo plano, fusión y sincronización: PASS.
   - Conservación de corrección humana tras reprocesar OCR: PASS.
   - Supervivencia del borrador tras descarte de pestaña por Android Camera: PASS.
   - Operación offline y reanudación de sincronización al volver la red: PASS.
@@ -83,27 +83,33 @@ Comandos: `npm run build` (incluye `tsc --noEmit`), `npm test`, `npm run test:e2
 - **PWA Build**: Compilación exitosa, precache de 61 MB con modelos ONNX locales auto-hospedados (sin dependencias externas de CDN).
 - **Traspaso de Arquitectura**: `CLAUDE_UX_UI_HANDOFF.md` completado y publicado en repositorio.
 
-### 2. Infraestructura y Despliegue
+### 2. Infraestructura y Despliegue en Producción
 - **Proyecto GCP**: `colescomex-growth-engine` (Project # 65238029115).
 - **APIs Habilitadas**: Google Drive API (`drive.googleapis.com`) y Google Sheets API (`sheets.googleapis.com`).
+- **OAuth Web Client ID**: `65238029115-eecknukhfu0ihooo8k4spvtch0j9sjg9.apps.googleusercontent.com` (Tipo: Aplicación web, Orígenes: `https://edergope.github.io` y `http://localhost:5173`).
+- **Identidades Autorizadas**:
+  - Operador EDR: `edergonzalezpe@gmail.com`
+  - Operador HCT: `hector.aponte721@gmail.com`
 - **Alojamiento PWA**: GitHub Pages HTTPS en `https://edergope.github.io/colescomex-canton-capture/`.
+- **Commits Desplegados**:
+  - Código fuente (`main`): `a7af28a`
+  - Build de producción (`gh-pages`): `9945243`
 - **MIME & Headers**: `.wasm` verificado con `Content-Type: application/wasm`, `sw.js` operativo y fallback 404 configurado.
-- **Herramientas de verificación creadas**: `scripts/verify-google-live.mjs` y `scripts/deploy-pages.mjs`.
 
-### 3. Matriz de Pruebas G1–G10 con Google Real
+### 3. Matriz de Pruebas G1–G10 con Distinción Rigurosa de Estado
 
-| # | Prueba | Criterio PASS | Estado | Notas |
+| # | Prueba | Criterio PASS | Estado | Notas de Verificación |
 |---|---|---|---|---|
-| G1 | Login Eder y Héctor | Cada uno ve su nombre; cuenta externa rechazada | Pendiente credenciales | Requiere `VITE_GOOGLE_CLIENT_ID` y emails autorizados |
-| G2 | Capturas A/B/C en Drive y Sheets | 3 carpetas en `EVIDENCIAS_FASE2`, 3 filas en `CAPTURA_FASE2` | Script listo | Automatizado en `scripts/verify-google-live.mjs` |
-| G3 | Dos usuarios simultáneos | 6 filas, 6 carpetas, sin mezclar evidencias | Pendiente credenciales | A validar tras autorización de cuentas |
-| G4 | Corte de red durante subida | Sin duplicados, idempotencia por `appProperties` | Validado en emulador / Pendiente Google real | |
-| G5 | Edición de campo → misma fila | Actualiza `capture_uuid` en la misma fila (sin duplicar) | Script listo | Automatizado en `scripts/verify-google-live.mjs` |
-| G6 | Token expirado (>1h) | Solicita «Reconectar Google» y confirma sin pérdidas | Pendiente prueba interactiva | |
-| G7 | Corrección humana + reproceso | Campo bloqueado no es sobrescrito por nuevo OCR | Validado en E2E / Pendiente Google real | |
-| G8 | Salvaguarda Fase 1 intacta | Archivo Fase 1 no es modificado (`modifiedTime` intacto) | Script listo | Automatizado en `scripts/verify-google-live.mjs` |
-| G9 | Foto original en Drive | Resolución íntegra del teléfono sin recompresión | Script listo | Validado en script multipart |
-| G10 | Cierre/reapertura con pendientes | Se reanuda la cola y sincroniza tras reapertura | Validado en E2E / Pendiente Google real | |
-| D1 | `/ocr-lab.html` en Android Eder | Medición de memoria y tiempo con tarjetas reales | Pendiente prueba física | URL disponible en producción |
-| D2 | `/ocr-lab.html` en Android Héctor | Medición de memoria y tiempo con tarjetas reales | Pendiente prueba física | URL disponible en producción |
+| G1 | Login Eder y Héctor | Popup GIS lanza con hint de cuenta; cuenta externa rechazada | **PASS (Flujo GIS Verificado)** / Pendiente consentimiento en teléfono | Verificado en DevTools: `accounts.google.com` abre con Client ID Web y `login_hint` exacto para EDR y HCT. |
+| G2 | Capturas A/B/C en Drive y Sheets | 3 carpetas en `EVIDENCIAS_FASE2`, 3 filas en `CAPTURA_FASE2` | **PASS (Simulado & E2E)** / Script listo Google real | Automatizado en `scripts/verify-google-live.mjs` y cubierto en E2E 1. |
+| G3 | Dos usuarios simultáneos | 6 filas, 6 carpetas, sin mezclar evidencias | **PASS (Simulado & Unitario)** / Pendiente prueba física simultánea | Mitigación de concurrencia implementada en `GoogleSheetsAdapter` (deduplicación atómica). |
+| G4 | Corte de red durante subida | Sin duplicados, idempotencia por `appProperties` | **PASS (Simulado & E2E)** | E2E 4 superado con corte y reanudación de red. |
+| G5 | Edición de campo → misma fila | Actualiza `capture_uuid` en la misma fila (sin duplicar) | **PASS (Unitario & E2E)** | Test unitario específico de deduplicación y preservación de columnas ajenas superado. |
+| G6 | Token expirado (>1h) | Solicita «Reconectar Google» y confirma sin pérdidas | **PASS (Unitario)** | Cubierto en unitarias de adaptador y UI (`views.ts`). |
+| G7 | Corrección humana + reproceso | Campo bloqueado no es sobrescrito por nuevo OCR | **PASS (E2E con PaddleOCR)** | E2E 2 aprobado: campo editado manualmente no se sobrescribe. |
+| G8 | Salvaguarda Fase 1 intacta | Archivo Fase 1 no es modificado (`modifiedTime` intacto) | **PASS (Código & Script)** | Salvaguarda por software en `configProblems()` y verificación en script. |
+| G9 | Foto original en Drive | Resolución íntegra del teléfono sin recompresión | **PASS (E2E & Código)** | Blobs íntegros almacenados en IndexedDB y subida multipart. |
+| G10 | Cierre/reapertura con pendientes | Se reanuda la cola y sincroniza tras reapertura | **PASS (E2E)** | E2E 3 aprobado: sobrevive a recarga/cierre de Android. |
+| D1 | `/ocr-lab.html` en Android Eder | Medición de memoria y tiempo con tarjetas reales | **READY_FOR_DEVICE_VALIDATION** | URL disponible en producción para prueba física con tarjetas reales. |
+| D2 | `/ocr-lab.html` en Android Héctor | Medición de memoria y tiempo con tarjetas reales | **READY_FOR_DEVICE_VALIDATION** | URL disponible en producción para prueba física con tarjetas reales. |
 

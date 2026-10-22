@@ -96,14 +96,19 @@ Al diseñar y refactorizar la UI, **deben respetarse estrictamente las siguiente
 1. **No alterar `src/adapters/google.ts`:**
    - La sincronización depende de los contratos definidos en `src/adapters/contracts.ts`.
    - Google Drive utiliza `appProperties` (`capture_uuid`, `evidence_id`, `kind`, `external_ref`) para garantizar que nunca se creen carpetas ni archivos duplicados.
-   - Google Sheets realiza un `upsertRow` localizando la fila por `capture_uuid`.
-2. **No alterar los nombres de las 46 columnas:**
-   - El esquema definido en `src/sync/row.ts` y `docs/INTEGRATION_CONTRACTS.md` no debe modificarse.
-3. **No eliminar la llamada a `app.kickSync()`:**
+   - Google Sheets realiza un `upsertRow` atómico localizando la fila por `capture_uuid` con deduplicación y preservación estricta de columnas ajenas no administradas.
+2. **Identidades y OAuth Configurado:**
+   - Client ID Web oficial: `65238029115-eecknukhfu0ihooo8k4spvtch0j9sjg9.apps.googleusercontent.com`
+   - EDR: `edergonzalezpe@gmail.com`
+   - HCT: `hector.aponte721@gmail.com`
+   - Orígenes autorizados: `https://edergope.github.io` y `http://localhost:5173`.
+3. **No alterar los nombres de las 46 columnas:**
+   - El esquema comercial definido en `src/sync/row.ts` y `docs/INTEGRATION_CONTRACTS.md` no debe modificarse.
+4. **No eliminar la llamada a `app.kickSync()`:**
    - Cada guardado o edición de proveedor notifica al motor en segundo plano para sincronizar en cuanto haya red disponible.
-4. **No bloquear la captura por OCR:**
+5. **No bloquear la captura por OCR:**
    - El OCR debe seguir ejecutándose de forma asíncrona en el Worker sin congelar la interfaz ni impedir la creación de la siguiente captura.
-5. **Preservar el campo `external_ref`:**
+6. **Preservar el campo `external_ref`:**
    - El formato `CF26F2-<USER_ID>-<DEVICE_ID>-<SEQ>` es la clave de negocio que vincula la fila de Sheets con el nombre de la carpeta de Drive y los archivos físicos.
 
 ---
@@ -131,13 +136,15 @@ Durante las pruebas funcionales y de campo se identificaron las siguientes área
 
 ### Comandos de Validación
 ```bash
-# Ejecutar suite de pruebas unitarias e integración (debe dar 33/33 PASS)
+# Ejecutar suite de pruebas unitarias e integración (debe dar 34/34 PASS)
 npm test
 
 # Compilación de producción con comprobación estricta de tipos
 npm run build
 
-# Pruebas E2E headless con emulación móvil
+# Pruebas E2E headless con emulación móvil Pixel 7 y PaddleOCR local
+npm run test:e2e
+```
 npm run test:e2e
 ```
 
