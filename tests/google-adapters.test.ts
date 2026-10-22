@@ -39,16 +39,20 @@ function fakeGoogle() {
       const f = { ...meta, id: `F${files.length + 1}`, size: text.length }; files.push(f);
       return json({ id: f.id, webViewLink: `https://drive/${f.id}` });
     }
-    const sm = url.pathname.match(/\/v4\/spreadsheets\/[^/]+\/values\/(.+?)(:append)?$/);
+    const sm = url.pathname.match(/\/v4\/spreadsheets\/[^/]+\/values\/(.+?)(:(?:append|clear))?$/);
     if (sm) {
       const a = parseA1(sm[1]);
       if (method === 'GET') {
         const vals = grid.slice(a.r1 - 1, a.r2).map((r) => r.slice(a.c1 - 1, a.c2));
         return json({ values: vals.length ? vals : undefined });
       }
+      if (sm[2] === ':clear') {
+        if (grid[a.r1 - 1]) grid[a.r1 - 1] = [];
+        return json({ clearedRange: sm[1] });
+      }
       const body = JSON.parse(String(init.body)) as { values: (string | null)[][] };
       expect(url.searchParams.get('valueInputOption')).toBe('RAW');
-      if (sm[2]) { grid.push(body.values[0].map((v) => v ?? '')); return json({ updates: { updatedRange: `'T'!A${grid.length}:Z${grid.length}` } }); }
+      if (sm[2] === ':append') { grid.push(body.values[0].map((v) => v ?? '')); return json({ updates: { updatedRange: `'T'!A${grid.length}:Z${grid.length}` } }); }
       const r = grid[a.r1 - 1] ?? (grid[a.r1 - 1] = []);
       body.values[0].forEach((v, i) => { if (v !== null) r[a.c1 - 1 + i] = v; });
       return json({});
@@ -102,6 +106,21 @@ describe('GoogleSheetsAdapter', () => {
     expect(g.grid[0]).toEqual(['external_ref', 'company_name', 'notas_manuales', 'capture_uuid']);
     expect(g.grid[1]).toEqual(['OLD', 'Proveedor previo', 'no tocar']);
     expect(g.grid[2]).toEqual(['R1', 'A', '', 'u-1']);
+  });
+  it('detecta duplicados de capture_uuid generados concurrentemente, actualiza canónica y limpia réplicas', async () => {
+    const g = fakeGoogle();
+    g.grid = [
+      ['external_ref', 'company_name', 'capture_uuid', 'custom_col'],
+      ['R1', 'Nombre Viejo 1', 'u-dup', 'valor_importante_1'],
+      ['R1_DUP', 'Nombre Viejo 2', 'u-dup', 'valor_importante_2'], // Duplicado creado por concurrencia
+    ];
+    const sheets = new GoogleSheetsAdapter(await authed(), 'SHEET', 'CAPTURA_FASE2', g.fetch);
+    const res = await sheets.upsertRow({ external_ref: 'R1', company_name: 'Nombre Actualizado', capture_uuid: 'u-dup' });
+    expect(res).toEqual({ rowNumber: 2, action: 'updated' });
+    // Fila 2 (canónica) actualizada conservando custom_col (null en row no sobreescribe)
+    expect(g.grid[1]).toEqual(['R1', 'Nombre Actualizado', 'u-dup', 'valor_importante_1']);
+    // Fila 3 (duplicada) limpiada
+    expect(g.grid[2]).toEqual([]);
   });
   it('letras de columna', () => { expect([1, 26, 27, 45, 52, 53].map(col)).toEqual(['A', 'Z', 'AA', 'AS', 'AZ', 'BA']); });
 });

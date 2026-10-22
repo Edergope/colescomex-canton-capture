@@ -7,3 +7,5 @@ playwright-report
 ocr-eval/results/*.json
 .env
 .env.local
+.env.*.local
+.env.test

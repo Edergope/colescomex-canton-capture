@@ -80,33 +80,70 @@ export class GoogleSheetsAdapter implements SheetsAdapter {
   async upsertRow(row: Record<string, string>) {
     // 1. Cabecera: se crea/completa por nombre (nunca se reordenan columnas existentes).
     const headRes = (await (await this.api(`${this.base()}/values/${this.range('1:1')}`)).json()) as { values?: string[][] };
-    const header = headRes.values?.[0] ?? [];
+    let header = headRes.values?.[0] ?? [];
     const missing = Object.keys(row).filter((k) => !header.includes(k));
     if (missing.length) {
       const newHeader = [...header, ...missing];
       await this.api(`${this.base()}/values/${this.range(`A1:${col(newHeader.length)}1`)}?valueInputOption=RAW`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [newHeader] }),
       });
-      header.push(...missing);
+      header = newHeader;
     }
-    // 2. Buscar la fila por capture_uuid.
-    const keyCol = col(header.indexOf('capture_uuid') + 1);
+    // 2. Buscar todas las filas con este capture_uuid para resolver posibles carreras concurrentes.
+    const keyColIdx = header.indexOf('capture_uuid') + 1;
+    const keyCol = col(keyColIdx);
     const keys = (await (await this.api(`${this.base()}/values/${this.range(`${keyCol}:${keyCol}`)}`)).json()) as { values?: string[][] };
-    const rowIdx = (keys.values ?? []).findIndex((v, i) => i > 0 && v[0] === row.capture_uuid);
-    // RAW: evita que Sheets interprete "+86..." como fórmula o número.
+    const matches: number[] = [];
+    (keys.values ?? []).forEach((v, i) => {
+      if (i > 0 && v[0] === row.capture_uuid) matches.push(i + 1);
+    });
+
+    // RAW: evita que Sheets interprete "+86..." como fórmula o número. Los null preservan columnas existentes.
     const values = header.map((h) => (h in row ? row[h] : null));
-    if (rowIdx > 0) {
-      const n = rowIdx + 1;
-      await this.api(`${this.base()}/values/${this.range(`A${n}:${col(header.length)}${n}`)}?valueInputOption=RAW`, {
+
+    // Si ya existe al menos una fila previa: actualizar la primera (canónica) y limpiar duplicados si los hubiera.
+    if (matches.length > 0) {
+      const canonicalRow = matches[0];
+      await this.api(`${this.base()}/values/${this.range(`A${canonicalRow}:${col(header.length)}${canonicalRow}`)}?valueInputOption=RAW`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [values] }),
       });
-      return { rowNumber: n, action: 'updated' as const };
+      for (let d = 1; d < matches.length; d++) {
+        const dupRow = matches[d];
+        await this.api(`${this.base()}/values/${this.range(`A${dupRow}:${col(header.length)}${dupRow}`)}:clear`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return { rowNumber: canonicalRow, action: 'updated' as const };
     }
+
+    // Inserción atómica mediante append
     const res = await this.api(`${this.base()}/values/${this.range('A1')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [values.map((v) => v ?? '')] }),
     });
     const upd = (await res.json()) as { updates?: { updatedRange?: string } };
     const n = Number(upd.updates?.updatedRange?.match(/(\d+)(?::|$)/)?.[1] ?? 0);
+
+    // Verificación post-inserción inmediata contra inserciones concurrentes de otros dispositivos/hilos
+    try {
+      const verifyKeys = (await (await this.api(`${this.base()}/values/${this.range(`${keyCol}:${keyCol}`)}`)).json()) as { values?: string[][] };
+      const postMatches: number[] = [];
+      (verifyKeys.values ?? []).forEach((v, i) => {
+        if (i > 0 && v[0] === row.capture_uuid) postMatches.push(i + 1);
+      });
+      if (postMatches.length > 1) {
+        const canonical = postMatches[0];
+        for (let d = 1; d < postMatches.length; d++) {
+          const dupRow = postMatches[d];
+          await this.api(`${this.base()}/values/${this.range(`A${dupRow}:${col(header.length)}${dupRow}`)}:clear`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return { rowNumber: canonical, action: (canonical === n ? 'inserted' : 'updated') as 'inserted' | 'updated' };
+      }
+    } catch {
+      // Si la verificación post-inserción no responde por red, el append inicial ya fue confirmado
+    }
+
     return { rowNumber: n, action: 'inserted' as const };
   }
 }

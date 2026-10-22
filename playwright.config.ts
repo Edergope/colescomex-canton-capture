@@ -8,5 +8,5 @@ export default defineConfig({
   workers: 1,
   reporter: [['list'], ['json', { outputFile: 'test-results/e2e-results.json' }]],
   use: { ...devices['Pixel 7'], baseURL: 'http://localhost:4174', trace: 'retain-on-failure', serviceWorkers: 'allow' },
-  webServer: { command: 'npx vite preview --port 4174 --strictPort', port: 4174, reuseExistingServer: false, timeout: 60_000 },
+  webServer: { command: 'npx vite build --mode test && npx vite preview --port 4174 --strictPort', port: 4174, reuseExistingServer: false, timeout: 60_000 },
 });
