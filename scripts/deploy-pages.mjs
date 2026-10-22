@@ -3,9 +3,14 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-function run(cmd, cwd = process.cwd()) {
-  console.log(`> ${cmd}`);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '..');
+
+function run(cmd, cwd = projectRoot) {
+  console.log(`> ${cmd} (in ${cwd})`);
   return execSync(cmd, { cwd, stdio: 'inherit' });
 }
 
@@ -17,8 +22,9 @@ run('npm run build');
 
 // 2. Preparar archivos para GitHub Pages (.nojekyll y 404.html)
 console.log('\n[2/5] Configurando .nojekyll y fallback 404.html en dist/...');
-fs.writeFileSync(path.join('dist', '.nojekyll'), '');
-fs.copyFileSync(path.join('dist', 'index.html'), path.join('dist', '404.html'));
+const distDir = path.join(projectRoot, 'dist');
+fs.writeFileSync(path.join(distDir, '.nojekyll'), '');
+fs.copyFileSync(path.join(distDir, 'index.html'), path.join(distDir, '404.html'));
 
 // 3. Crear repositorio remoto si no existe
 const repoName = 'colescomex-canton-capture';
@@ -34,7 +40,7 @@ try {
 // 4. Configurar remoto en el repo principal y subir main si no se ha subido
 console.log('\n[4/5] Asegurando sincronización de código fuente en main...');
 try {
-  execSync('git remote get-url origin', { stdio: 'pipe' });
+  execSync('git remote get-url origin', { cwd: projectRoot, stdio: 'pipe' });
 } catch {
   run(`git remote add origin https://github.com/Edergope/${repoName}.git`);
 }
@@ -49,7 +55,6 @@ try {
 
 // 5. Publicar dist/ en la rama gh-pages
 console.log('\n[5/5] Desplegando dist/ en la rama gh-pages...');
-const distDir = path.resolve('dist');
 const tmpGitDir = path.join(distDir, '.git');
 if (fs.existsSync(tmpGitDir)) {
   fs.rmSync(tmpGitDir, { recursive: true, force: true });
