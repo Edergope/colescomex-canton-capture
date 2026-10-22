@@ -1,0 +1,9 @@
+node_modules
+dist
+.asset-cache
+public/ocr-assets
+test-results
+playwright-report
+ocr-eval/results/*.json
+.env
+.env.local

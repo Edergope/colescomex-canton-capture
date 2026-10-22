@@ -1,0 +1,248 @@
+[
+  {
+    "name": "c1_front",
+    "card": "c1",
+    "side": "front",
+    "files": {
+      "scan": "c1_front_scan.png",
+      "photo": "c1_front_photo.jpg"
+    },
+    "expect": {
+      "company_name": "GUANGZHOU BRIGHT LIGHTING TECHNOLOGY CO., LTD.",
+      "company_name_cn": "广州市明亮照明科技有限公司",
+      "contact_name": [
+        "王伟",
+        "Jason Wang"
+      ],
+      "phone_1": "+8613800138000",
+      "phone_2": "+862088886666",
+      "email": "jason@brightlighting.com.cn",
+      "website": "www.brightlighting.com.cn",
+      "wechat": "+8613800138000",
+      "whatsapp": "+8613800138000",
+      "city": "Guangzhou"
+    },
+    "text": [
+      "明亮",
+      "广州市明亮照明科技有限公司",
+      "GUANGZHOU BRIGHT LIGHTING TECHNOLOGY CO., LTD.",
+      "王伟 销售经理",
+      "Jason Wang Sales Manager",
+      "Tel: +86-20-8888 6666   Fax: +86-20-8888 6667",
+      "Mob/WeChat/WhatsApp: +86 138 0013 8000",
+      "E-mail: jason@brightlighting.com.cn",
+      "Web: www.brightlighting.com.cn",
+      "Add: No. 18 Huangpu Road, Baiyun District, Guangzhou, China"
+    ]
+  },
+  {
+    "name": "c1_back",
+    "card": "c1",
+    "side": "back",
+    "files": {
+      "scan": "c1_back_scan.png",
+      "photo": "c1_back_photo.jpg"
+    },
+    "expect": {
+      "company_name_cn": "广州市明亮照明科技有限公司",
+      "phone_1": "+862088886666",
+      "hall": "11.2",
+      "booth": "C15",
+      "province": "Guangdong",
+      "city": "Guangzhou"
+    },
+    "text": [
+      "广州市明亮照明科技有限公司",
+      "主营产品：LED灯带、面板灯、筒灯、户外泛光灯",
+      "地址：广东省广州市白云区黄埔路18号",
+      "电话：020-8888 6666",
+      "展位号：11.2C15"
+    ]
+  },
+  {
+    "name": "c2_front",
+    "card": "c2",
+    "side": "front",
+    "files": {
+      "scan": "c2_front_scan.png",
+      "photo": "c2_front_photo.jpg"
+    },
+    "expect": {
+      "company_name": "NINGBO OCEAN IMP. & EXP. CO., LTD.",
+      "contact_name": "Tony Li",
+      "phone_1": "+8613957441234",
+      "phone_2": "+8657487654321",
+      "email": "tony@ocean-nb.com",
+      "website": "www.ocean-nb.com",
+      "city": "Ningbo"
+    },
+    "text": [
+      "NINGBO OCEAN IMP. & EXP. CO., LTD.",
+      "Tony Li",
+      "Export Manager",
+      "M: +86 139 5744 1234",
+      "T: +86 574 8765 4321",
+      "E: tony@ocean-nb.com",
+      "W: www.ocean-nb.com",
+      "Room 1205, Tianan Building, Yinzhou District, Ningbo, China"
+    ]
+  },
+  {
+    "name": "c2_back",
+    "card": "c2",
+    "side": "back",
+    "files": {
+      "scan": "c2_back_scan.png",
+      "photo": "c2_back_photo.jpg"
+    },
+    "expect": {
+      "company_name_cn": "宁波海洋进出口有限公司",
+      "contact_name": "李涛",
+      "phone_1": "+8613957441234",
+      "wechat": "tonyli_nb",
+      "city": "Ningbo",
+      "province": "Zhejiang"
+    },
+    "text": [
+      "宁波海洋进出口有限公司",
+      "李涛 外贸经理",
+      "手机：13957441234",
+      "微信：tonyli_nb",
+      "地址：浙江省宁波市鄞州区天安大厦1205室"
+    ]
+  },
+  {
+    "name": "c3_front",
+    "card": "c3",
+    "side": "front",
+    "files": {
+      "scan": "c3_front_scan.png",
+      "photo": "c3_front_photo.jpg"
+    },
+    "expect": {
+      "company_name_cn": "佛山市顺德区美家家具有限公司",
+      "contact_name": "陈小明",
+      "job_title": "总经理",
+      "phone_1": "+8613922334455",
+      "phone_2": "+8675722334455",
+      "email": "chen@meijia-furniture.cn",
+      "city": "Foshan",
+      "province": "Guangdong"
+    },
+    "text": [
+      "佛山市顺德区美家家具有限公司",
+      "陈小明",
+      "总经理",
+      "手机：139 2233 4455",
+      "电话：0757-2233 4455",
+      "邮箱：chen@meijia-furniture.cn",
+      "地址：广东省佛山市顺德区乐从镇家具城B座12号"
+    ]
+  },
+  {
+    "name": "c4_front",
+    "card": "c4",
+    "side": "front",
+    "files": {
+      "scan": "c4_front_scan.png",
+      "photo": "c4_front_photo.jpg"
+    },
+    "expect": {
+      "company_name": "SHENZHEN TOPWAY ELECTRONICS CO.,LTD",
+      "company_name_cn": "深圳市拓威电子有限公司",
+      "contact_name": "Amy Zhang",
+      "job_title": "Sales Director",
+      "phone_1": "+8618688889999",
+      "email": "amy@topway-sz.com",
+      "website": "topway-sz.com",
+      "whatsapp": "+8618688889999"
+    },
+    "text": [
+      "SHENZHEN TOPWAY ELECTRONICS CO.,LTD",
+      "深圳市拓威电子有限公司",
+      "Amy Zhang",
+      "Sales Director",
+      "T: 0755-2345 6789   M: 18688889999",
+      "E: amy@topway-sz.com   W: topway-sz.com",
+      "WhatsApp: +86 186 8888 9999"
+    ]
+  },
+  {
+    "name": "c4_back",
+    "card": "c4",
+    "side": "back",
+    "files": {
+      "scan": "c4_back_scan.png",
+      "photo": "c4_back_photo.jpg"
+    },
+    "expect": {
+      "main_products": "Power Banks, USB Chargers, Bluetooth Speakers",
+      "hall": "9.2",
+      "booth": "D18-19",
+      "city": "Shenzhen",
+      "province": "Guangdong"
+    },
+    "text": [
+      "Main Products: Power Banks, USB Chargers, Bluetooth Speakers",
+      "Booth No.: 9.2 D18-19",
+      "Add: 3F, Building A, Hi-Tech Park, Nanshan District, Shenzhen, Guangdong, China"
+    ]
+  },
+  {
+    "name": "c5_front",
+    "card": "c5",
+    "side": "front",
+    "files": {
+      "scan": "c5_front_scan.png",
+      "photo": "c5_front_photo.jpg"
+    },
+    "expect": {
+      "company_name": "YIWU XINGCHEN DAILY PRODUCTS CO., LTD",
+      "company_name_cn": "义乌市星辰日用品有限公司",
+      "wechat": "lilychen_yw88",
+      "whatsapp": "+8615867891234",
+      "email": "lily@xcdaily.com",
+      "hall": "13.1",
+      "booth": "G22",
+      "city": "Yiwu",
+      "province": "Zhejiang"
+    },
+    "text": [
+      "义乌市星辰日用品有限公司",
+      "YIWU XINGCHEN DAILY PRODUCTS CO., LTD",
+      "Lily Chen 陈丽丽",
+      "WeChat: lilychen_yw88",
+      "WhatsApp: +86 15867891234",
+      "Email: lily@xcdaily.com",
+      "Booth: 13.1 G22",
+      "Address: No.288 Chouzhou North Road, Yiwu, Zhejiang, China"
+    ]
+  },
+  {
+    "name": "c6_front",
+    "card": "c6",
+    "side": "front",
+    "files": {
+      "scan": "c6_front_scan.png",
+      "photo": "c6_front_photo.jpg"
+    },
+    "expect": {
+      "company_name": "HUIZHOU GREENLEAF PACKAGING CO., LTD.",
+      "contact_name": [
+        "Kevin Huang",
+        "黄凯文"
+      ],
+      "phone_1": "+8613712345678",
+      "email": "kevin.huang@greenleafpack.com",
+      "website": "www.greenleafpack.com"
+    },
+    "text": [
+      "Kevin Huang",
+      "黄凯文 · 采购总监",
+      "HUIZHOU GREENLEAF PACKAGING CO., LTD.",
+      "Mobile: +86 137 1234 5678",
+      "kevin.huang@greenleafpack.com",
+      "www.greenleafpack.com"
+    ]
+  }
+]

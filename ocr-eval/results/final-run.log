@@ -1,0 +1,46 @@
+paddle {
+ "engine": "paddleocr-js@0.4.2/PP-OCRv5_mobile",
+ "initMs": 1423,
+ "memory": {
+  "baselineRssMb": 238,
+  "peakRssMb": 1061,
+  "jsHeapUsedMb": 22
+ },
+ "scan": {
+  "images": 9,
+  "avgMs": 754,
+  "avgCER": 0.003,
+  "cjkRecall": 1,
+  "fieldAccuracy": "64/64"
+ },
+ "photo": {
+  "images": 9,
+  "avgMs": 729,
+  "avgCER": 0.005,
+  "cjkRecall": 1,
+  "fieldAccuracy": "63/64"
+ }
+}
+tesseract {
+ "engine": "tesseract.js@7/eng+chi_sim",
+ "initMs": 94,
+ "memory": {
+  "baselineRssMb": 238,
+  "peakRssMb": 567,
+  "jsHeapUsedMb": 4
+ },
+ "scan": {
+  "images": 9,
+  "avgMs": 297,
+  "avgCER": 0.015,
+  "cjkRecall": 0.972,
+  "fieldAccuracy": "64/64"
+ },
+ "photo": {
+  "images": 9,
+  "avgMs": 565,
+  "avgCER": 0.102,
+  "cjkRecall": 0.967,
+  "fieldAccuracy": "50/64"
+ }
+}

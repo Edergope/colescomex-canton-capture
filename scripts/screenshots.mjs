@@ -1,0 +1,21 @@
+import { chromium, devices } from '@playwright/test';
+// Genera capturas de pantalla de la app compilada (docs/screenshots). Uso: node scripts/screenshots.mjs "$PWD"
+import { spawn } from 'node:child_process';
+const root = process.argv[2];
+const srv = spawn('npx', ['vite', 'preview', '--port', '4175', '--strictPort'], { cwd: root });
+await new Promise((r) => srv.stdout.on('data', (d) => String(d).includes('4175') && r()));
+const b = await chromium.launch(); const ctx = await b.newContext({ ...devices['Pixel 7'] }); const p = await ctx.newPage();
+const fx = (n) => `${root}/ocr-eval/fixtures/${n}`;
+const shoot = async (sel, f) => { const c = p.waitForEvent('filechooser'); await p.locator(sel).click(); await (await c).setFiles(f); };
+const snap = (n) => p.screenshot({ path: `${root}/docs/screenshots/${n}.png`, fullPage: true });
+await p.goto('http://localhost:4175/'); await snap('01-login');
+await p.getByRole('button', { name: 'Soy Eder' }).click(); await p.waitForTimeout(300);
+await p.locator('#btn-register').click(); await snap('02-captura-frontal');
+await shoot('#btn-front', fx('c1_front_photo.jpg')); await p.waitForTimeout(300); await snap('03-respaldo');
+await shoot('#btn-back-yes', fx('c1_back_photo.jpg')); await shoot('#btn-stand', fx('c2_back_scan.png')); await p.waitForTimeout(300); await snap('04-evidencias');
+await p.locator('#btn-save-next').click();
+await shoot('#btn-front', fx('c5_front_photo.jpg')); await p.locator('#btn-back-no').click(); await p.locator('#btn-save-done').click();
+await p.waitForTimeout(9000); await snap('05-inicio');
+await p.getByRole('button', { name: /Ver capturas/ }).click(); await p.waitForTimeout(500); await snap('06-lista');
+await p.locator('#capture-list .item').first().click(); await p.waitForTimeout(500); await snap('07-detalle');
+await b.close(); srv.kill();
