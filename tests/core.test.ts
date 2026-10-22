@@ -141,9 +141,10 @@ describe('Sincronización', () => {
     const origUpload = drive.uploadEvidence.bind(drive);
     drive.uploadEvidence = async (...args) => { if (++ops === 2) net.dropResponseNext = 1; return origUpload(...args); };
     await app.syncNow(true);
-    const afterCut = (await app.repo.get(caps[0].uuid))!;
-    expect(afterCut.sync_status).toBe('ERROR');
-    expect(afterCut.sync_error).toMatch(/reintentar/);
+    // el corte cae en la segunda subida, sea cual sea la captura (pueden compartir milisegundo de creación)
+    const afterCut = (await Promise.all(caps.map((c) => app.repo.get(c.uuid)))).filter((c) => c!.sync_status === 'ERROR');
+    expect(afterCut).toHaveLength(1);
+    expect(afterCut[0]!.sync_error).toMatch(/reintentar/);
 
     // la fila se escribe pero se pierde la respuesta → el reintento debe ACTUALIZAR, no insertar
     drive.uploadEvidence = origUpload;

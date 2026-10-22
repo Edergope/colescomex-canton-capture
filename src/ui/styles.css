@@ -82,3 +82,15 @@ pre.ocr { white-space: pre-wrap; font-size: 13px; background: var(--neutral-bg);
 .hidden { display: none !important; }
 .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.92); z-index: 30; display: flex; align-items: center; justify-content: center; }
 .viewer img { max-width: 100%; max-height: 100%; }
+
+.extras { display: grid; gap: 2px; margin: 6px 0; }
+.scanrows { display: grid; gap: 6px; margin-top: 8px; }
+.ce-overlay { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px; }
+.ce-stage { position: relative; max-width: 100%; max-height: 75vh; }
+.ce-img { display: block; max-width: 100%; max-height: 75vh; }
+.ce-svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.ce-poly { fill: rgba(23,87,214,.15); stroke: #4f8bff; stroke-width: 0.4%; vector-effect: non-scaling-stroke; }
+.ce-handle { fill: rgba(244,180,0,.85); stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
+
+/* Instancia no productiva: franja permanente para que nadie la confunda con la app de la feria */
+body.instance-preview::before { content: attr(data-instance); display: block; position: sticky; top: 0; z-index: 50; background: repeating-linear-gradient(45deg, #b3261e 0 12px, #8c1d17 12px 24px); color: #fff; font: 700 12px/1.8 system-ui; text-align: center; letter-spacing: .5px; }

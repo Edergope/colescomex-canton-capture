@@ -35,6 +35,9 @@ export interface FieldCandidate {
   line?: number;
 }
 
+/** Datos sin columna comercial propia (se exportan en columnas técnicas). */
+export interface SideExtras { fax: string[]; qq: string[]; postal_code: string[]; secondary_companies: string[] }
+
 export interface SideExtraction {
   fields: Partial<Record<OcrField, FieldCandidate>>;
   /** teléfonos ordenados por prioridad (móvil etiquetado primero); se asignan a phone_1/phone_2 al fusionar */
@@ -43,11 +46,11 @@ export interface SideExtraction {
   illegible: Partial<Record<OcrField, string>>;
   /** valores mencionados fuera de contexto (p. ej. ciudad en el nombre de la empresa): se sugieren, no se rellenan */
   suggestions: Partial<Record<OcrField, string>>;
-  extras: { fax: string[]; qq: string[] };
+  extras: SideExtras;
   hits: Hit[];
 }
 
-type LabelType = 'tel' | 'mobile' | 'fax' | 'email' | 'web' | 'wechat' | 'whatsapp' | 'address' | 'booth' | 'products' | 'name' | 'title' | 'qq' | 'ignore';
+type LabelType = 'tel' | 'mobile' | 'fax' | 'email' | 'web' | 'wechat' | 'whatsapp' | 'address' | 'booth' | 'products' | 'name' | 'title' | 'qq' | 'postal' | 'ignore';
 interface LabelDef { src: string; type: LabelType; latin: boolean; strict: boolean }
 
 const L = (src: string, type: LabelType, strict = false): LabelDef => ({ src, type, latin: /^[A-Za-z]/.test(src), strict });
@@ -68,7 +71,9 @@ const LABEL_DEFS: LabelDef[] = [
   L('主营产品', 'products', true), L('主营', 'products', true), L('主要产品', 'products', true), L('经营范围', 'products', true), L('产品', 'products', true),
   L('Contact Person', 'name'), L('Contact', 'name', true), L('Name', 'name', true), L('联系人', 'name'), L('姓名', 'name', true),
   L('Title', 'title', true), L('Position', 'title', true), L('职位', 'title', true), L('职务', 'title', true),
-  L('QQ', 'qq'), L('Skype', 'ignore'), L('Zip', 'ignore', true), L('Post Code', 'ignore', true), L('邮编', 'ignore'),
+  L('QQ', 'qq'), L('Skype', 'ignore'),
+  L('ZipCode', 'postal'), L('Zip Code', 'postal'), L('Zip', 'postal', true), L('Postcode', 'postal'), L('Post Code', 'postal'), L('Postal Code', 'postal'), L('P.C', 'postal', true),
+  L('邮政编码', 'postal'), L('邮编', 'postal'),
 ].sort((a, b) => b.src.length - a.src.length);
 
 const SEP_BEFORE = /[\s|,;/·•()（）、，；]/;
@@ -123,6 +128,10 @@ const TITLE_CN_RE = /总经理|副总经理|经理|总监|主管|董事长|董�
 const ADDRESS_CN_RE = /省|市|区|县|镇|乡|村|路|街|道|号|巷|弄|大厦|广场|工业园|工业区|开发区|园区|楼|室|栋/;
 const ADDRESS_EN_RE = /\b(road|rd\.?|street|st\.?|avenue|ave\.?|district|dist\.?|town|county|city|province|industrial (park|zone|area|district)|zone|building|bldg\.?|floor|fl\.?|room|rm\.?|no\.?\s*\d+|village|lane|highway|p\.?\s?r\.?\s?china|china)\b/i;
 const PRODUCTS_RE = /(专业生产|专业制造|主营|专注于|生产销售)|\b(specializ\w+ in|manufacturer of|we (produce|make|supply)|supplier of|professional (manufacturer|supplier) of)\b/i;
+// Vocabulario de productos: una línea con estas palabras no es un nombre de persona.
+const PRODUCT_WORDS = /\b(lights?|lighting|lamps?|led|poles?|garden|plastic|steel|aluminium|aluminum|mast|electric|solar|street|bulbs?|panels?|cables?|wires?|tubes?|pipes?|valves?|pumps?|motors?|fans?|chairs?|tables?|sofas?|beds?|bags?|shoes?|toys?|tools?|parts|machines?|machinery|equipment|textiles?|fabrics?|garments?|ceramics?|glass|metal|hardware|furniture|kitchen|bathroom|outdoor|indoor|products?|accessories|materials?|communication|polygon|taper|high|mould|molds?|moulds?|printing|packaging|boxes?|bottles?|cups?)\b/i;
+// Encabezado de lista de productos sin valor en la misma línea ("WE PRODUCE:", "Main Products:", "主营产品：")
+const PRODUCT_HEADER_RE = /^(we\s*(produce|manufacture|make|supply|offer|specialize\s*in)|main\s*products?|our\s*products?|products?(\s*range)?|product\s*list|主营产品|主要产品|主营|经营范围|产品)\s*[:：]?\s*(.*)$/i;
 const NAME_STOPWORDS = /\b(china|guangzhou|shenzhen|foshan|dongguan|ningbo|yiwu|xiamen|sales|manager|company|limited|ltd|road|street|province|city|district|canton|fair|booth|hall|tel|fax|email|mobile|phone|web|website|wechat|whatsapp|address|products?|factory|group|industrial|trading|technology|the|and|of|international|electronics?|export|import|lighting|furniture|machinery|co)\b/i;
 // Apellidos chinos frecuentes (aumentan la confianza en nombres de 2-4 caracteres).
 const CN_SURNAMES = '王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤';
@@ -139,10 +148,11 @@ const PHONE_SCAN = /(?:\+|00)?\(?\d[\d\s\-().]{5,}\d/g;
 
 export function extractEntities(lines: OcrLine[]): SideExtraction {
   const hits: Hit[] = [];
-  const extras = { fax: [] as string[], qq: [] as string[] };
+  const extras: SideExtras = { fax: [], qq: [], postal_code: [], secondary_companies: [] };
   const illegible: Partial<Record<OcrField, string>> = {};
   const plain: { idx: number; text: string; score: number }[] = [];
   const addressLines = new Set<number>();
+  const productHeaders: { idx: number; value: string; score: number }[] = [];
 
   const push = (h: Omit<Hit, 'status' | 'reason'> & { status?: FieldStatus; reason?: string }) => {
     const ls = lineStatus(h.score);
@@ -229,7 +239,7 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
             break;
           }
           case 'products':
-            if (value) push({ field: 'main_products', value: cleanSpaces(value), raw: value, line: idx, score, labeled: true, strength: 3 });
+            productHeaders.push({ idx, value, score }); // la lista puede seguir en los renglones siguientes
             break;
           case 'name':
             if (value) push({ field: 'contact_name', value: cleanSpaces(value), raw: value, line: idx, score, labeled: true, strength: 4 });
@@ -237,7 +247,8 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
           case 'title':
             if (value) push({ field: 'job_title', value: cleanSpaces(value), raw: value, line: idx, score, labeled: true, strength: 4 });
             break;
-          case 'qq': extras.qq.push(value); break;
+          case 'qq': { const v = value.replace(/\s+/g, ''); if (/^\d{5,12}$/.test(v)) extras.qq.push(v); break; }
+          case 'postal': { const v = value.match(/\d{4,10}/)?.[0]; if (v) extras.postal_code.push(v); break; }
           default: break;
         }
       }
@@ -284,11 +295,41 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
     }
   });
 
+  // Líneas de ruido (logotipos leídos como "CE", "ISO"…): no interrumpen continuaciones de dirección o listas.
+  const isNoise = (i: number) => { const t = nfkc(lines[i]?.text ?? ''); return t.replace(/[^\p{L}\p{N}]/gu, '').length <= 3 && !/@|\d{3}/.test(t); };
+  const prevContent = (i: number) => { let j = i - 1; while (j >= 0 && isNoise(j)) j--; return j; };
   // Clasificación de líneas sin etiqueta: empresa, cargo, nombre, dirección, productos.
+  const consumed = new Set<number>(); // líneas ya asignadas (continuaciones, elementos de lista)
   const titleLines = new Set<number>();
-  const consumed = new Set<number>(); // líneas añadidas como continuación de otra
-  const endsWithComma = (i: number) => /[,，]\s*$/.test(lines[i]?.text ?? '');
+  // Listas de productos: encabezado + renglones siguientes (se consumen antes de cualquier otra regla,
+  // así un producto nunca se confunde con una persona o empresa).
   for (const p of plain) {
+    const m = p.text.match(PRODUCT_HEADER_RE);
+    if (m) productHeaders.push({ idx: p.idx, value: rawAfterHeader(lines[p.idx]?.text ?? '', m[3]), score: p.score });
+  }
+  const plainByIdx = new Map(plain.map((p) => [p.idx, p]));
+  for (const hd of productHeaders.sort((a, b) => a.idx - b.idx)) {
+    if (consumed.has(hd.idx)) continue;
+    const items: string[] = hd.value ? splitItems(hd.value) : [];
+    for (let j = hd.idx + 1; j < lines.length; j++) {
+      if (isNoise(j)) continue; // ruido entre renglones de la lista (logotipos)
+      if (!plainByIdx.has(j)) break;
+      const raw = nfkc(lines[j]?.text ?? '');
+      if (!isProductItem(plainByIdx.get(j)!.text, raw) || PRODUCT_HEADER_RE.test(plainByIdx.get(j)!.text)) break;
+      items.push(...splitItems(raw));
+      consumed.add(j);
+    }
+    if (!items.length) continue;
+    consumed.add(hd.idx);
+    // Elementos ambiguos (palabras pegadas por el OCR, dos productos en un renglón): se conserva el texto leído
+    // tal cual y se marca para revisión, con una separación sugerida como candidata (nunca como valor).
+    const amb = productAmbiguity(items, lines);
+    push({ field: 'main_products', value: items.join('; '), raw: lines[hd.idx]?.text ?? '', line: hd.idx, score: hd.score, labeled: true, strength: 3,
+      status: amb.issues.length ? 'review' : undefined, reason: amb.issues.length ? `posibles errores de separación: ${amb.issues.join(' · ')}` : undefined });
+    if (amb.issues.length) push({ field: 'main_products', value: amb.suggestion.join('; '), raw: '(sugerencia)', line: hd.idx, score: hd.score, labeled: false, strength: 0 });
+  }
+  for (const p of plain) {
+    if (consumed.has(p.idx)) continue;
     const t = p.text;
     const cjk = isCjkDominant(t);
     if (cjk && COMPANY_CN_RE.test(t) && t.length >= 4 && !ADDRESS_CN_RE.test(t.replace(/有限公司|公司|集团|厂/g, '')) ) {
@@ -300,7 +341,7 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
       push({ field: 'company_name_cn', value: t.replace(/\s+/g, ''), raw: t, line: p.idx, score: p.score, labeled: false, strength: 2 });
       continue;
     }
-    if (!cjk && COMPANY_EN_RE.test(t) && !ADDRESS_EN_RE.test(t.replace(/\bchina\b/i, '')) && t.split(' ').length >= 2
+    if (!cjk && COMPANY_EN_RE.test(t) && (COMPANY_EN_STRONG.test(t) || !ADDRESS_EN_RE.test(t.replace(/\bchina\b/i, ''))) && t.split(' ').length >= 2
       && (COMPANY_EN_STRONG.test(t) || !TITLE_EN_RE.test(t))) {
       const strong = COMPANY_EN_STRONG.test(t);
       push({ field: 'company_name', value: t, raw: t, line: p.idx, score: p.score, labeled: false, strength: strong ? 3 : 1,
@@ -333,25 +374,21 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
       titleLines.add(p.idx);
       continue;
     }
-    const prevProducts = hits.find((h) => h.field === 'main_products' && h.line === p.idx - 1 && h.labeled);
-    if (prevProducts && !findLabels(t).length && !/@|www\.|\d{5,}/.test(t)) {
-      prevProducts.value = cleanSpaces(`${prevProducts.value}${endsWithComma(p.idx - 1) ? ',' : ''} ${t}`);
-      consumed.add(p.idx);
-      continue;
-    }
     if (PRODUCTS_RE.test(t)) {
       push({ field: 'main_products', value: t, raw: t, line: p.idx, score: p.score, labeled: false, strength: 1, status: 'review', reason: 'productos detectados sin etiqueta' });
       continue;
     }
     const placeLike = !!(findPlaces(t).city || findPlaces(t).province);
     const isAddr = (cjk && ADDRESS_CN_RE.test(t) && /\d|号|路|区/.test(t) && t.length >= 6) || (!cjk && ADDRESS_EN_RE.test(t) && (/\d/.test(t) || /,/.test(t)) && t.length >= 10);
-    const isAddrCont = addressLines.has(p.idx - 1) && (isAddr || placeLike || (cjk ? ADDRESS_CN_RE.test(t) : ADDRESS_EN_RE.test(t)));
+    const pc = prevContent(p.idx);
+    const isAddrCont = addressLines.has(pc) && (isAddr || placeLike || (cjk ? ADDRESS_CN_RE.test(t) : ADDRESS_EN_RE.test(t)));
     if (isAddr || isAddrCont) {
-      // continuación de una dirección etiquetada en la línea anterior
-      if (addressLines.has(p.idx - 1)) {
-        const prev = [...hits].reverse().find((h) => h.field === 'address' && h.line === p.idx - 1);
+      // continuación de una dirección de la línea anterior (saltando ruido como logotipos)
+      if (addressLines.has(pc)) {
+        const prev = [...hits].reverse().find((h) => h.field === 'address' && addressLines.has(h.line) && h.line <= pc);
         if (prev && isCjkDominant(prev.value) === cjk) {
-          prev.value = cleanSpaces(`${prev.value}${endsWithComma(p.idx - 1) ? ',' : ''} ${t}`);
+          // un salto de línea separa componentes de la dirección: se une con ", " (en chino, sin separador)
+          prev.value = cjk ? `${prev.value}${t}` : cleanSpaces(`${prev.value.replace(/[,，]\s*$/, '')}, ${t}`);
           addressLines.add(p.idx); consumed.add(p.idx); continue;
         }
       }
@@ -365,7 +402,9 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
     if (consumed.has(p.idx) || hits.some((h) => h.line === p.idx && !['phone', 'email', 'website', 'wechat', 'whatsapp', 'hall', 'booth'].includes(h.field))) continue;
     const t = p.text;
     const compact = t.replace(/\s+/g, '');
-    const nearTitle = titleLines.has(p.idx - 1) || titleLines.has(p.idx + 1);
+    const nearTitle = titleLines.has(p.idx - 1) || titleLines.has(p.idx + 1)
+      // o junto a un teléfono personal etiquetado (Mobile:/手机:), típico bajo el nombre
+      || hits.some((h) => h.field === 'phone' && h.labeled && h.phoneRole === 'mobile' && Math.abs(h.line - p.idx) === 1);
     if (/^[一-鿿]{2,4}$/.test(compact) && !COMPANY_CN_RE.test(compact) && !TITLE_CN_RE.test(compact) && !ADDRESS_CN_RE.test(compact.slice(1))) {
       const surname = CN_SURNAMES.includes(compact[0]);
       const ok = surname && nearTitle;
@@ -399,12 +438,99 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
     if (places.province) suggestions.province = places.province;
   }
 
-  return { ...buildFields(hits, illegible), suggestions, extras, hits };
+  const built = buildFields(hits, illegible);
+  // Varias empresas con forma jurídica en la misma cara: la primera (lectura de arriba abajo) es la principal;
+  // las demás se conservan como empresas adicionales identificadas, sin marcar ambigüedad.
+  for (const f of ['company_name', 'company_name_cn'] as const) {
+    const strong = hits.filter((h) => h.field === f && h.strength >= 3).sort((x, y) => x.line - y.line);
+    const distinct = strong.filter((h, i) => strong.findIndex((o) => o.value === h.value) === i);
+    if (distinct.length < 2) continue;
+    const [main, ...others] = distinct;
+    built.fields[f] = { value: main.value, status: main.status, reason: main.reason, confidence: main.score, line: main.line,
+      candidates: (built.fields[f]?.candidates ?? []).filter((v) => v !== main.value && !others.some((o) => o.value === v)) };
+    extras.secondary_companies.push(...others.map((o) => o.value));
+  }
+  return { ...built, suggestions, extras, hits };
+}
+
+const BASE_VOCAB: string[] = ['LIGHT', 'LIGHTS', 'LIGHTING', 'LAMP', 'LAMPS', 'POLE', 'POLES', 'STREET', 'GARDEN', 'SOLAR', 'LED', 'HIGH', 'MAST', 'STEEL', 'ALUMINIUM',
+  'ALUMINUM', 'ELECTRIC', 'COMMUNICATION', 'PLASTIC', 'FLOOD', 'WALL', 'PANEL', 'TUBE', 'BULB', 'CABLE', 'WIRE', 'PIPE', 'VALVE', 'PUMP', 'MOTOR', 'FAN',
+  'CHAIR', 'TABLE', 'SOFA', 'BED', 'BAG', 'BAGS', 'SHOE', 'SHOES', 'TOY', 'TOYS', 'TOOL', 'TOOLS', 'PARTS', 'MACHINE', 'GLASS', 'METAL', 'KITCHEN', 'BATHROOM',
+  'OUTDOOR', 'INDOOR', 'POWER', 'BANK', 'BANKS', 'CHARGER', 'CHARGERS', 'SPEAKER', 'SPEAKERS', 'BLUETOOTH', 'USB', 'BOX', 'BOXES', 'BOTTLE', 'BOTTLES'];
+
+/**
+ * Detecta elementos de una lista de productos que probablemente el OCR leyó mal (sin inventar nada):
+ * - palabra pegada: se puede partir en dos palabras conocidas (de la propia tarjeta o del vocabulario);
+ * - dos productos en un renglón: el mismo sustantivo principal aparece dos veces.
+ */
+export function productAmbiguity(items: string[], lines: OcrLine[]): { issues: string[]; suggestion: string[] } {
+  const vocab = new Set(BASE_VOCAB);
+  for (const l of lines) for (const w of nfkc(l.text).toUpperCase().match(/[A-Z]{3,}/g) ?? []) if (w.length <= 12) vocab.add(w);
+  const splitGlued = (w: string): string | null => {
+    const W = w.toUpperCase();
+    if (W.length < 7 || !/^[A-Z]+$/.test(W) || BASE_VOCAB.includes(W)) return null;
+    for (let i = 3; i <= W.length - 3; i++) {
+      const a = W.slice(0, i), b = W.slice(i);
+      if (vocab.has(a) && vocab.has(b) && a !== W && b !== W) return `${w.slice(0, i)} ${w.slice(i)}`;
+    }
+    return null;
+  };
+  const issues: string[] = [];
+  const suggestion: string[] = [];
+  for (const it of items) {
+    let fixed = it;
+    for (const w of it.match(/[A-Za-z]{7,}/g) ?? []) {
+      // solo si la palabra no aparece tal cual en otra parte de la tarjeta (no es una palabra legítima larga)
+      const occurrences = lines.filter((l) => nfkc(l.text).toUpperCase().includes(w.toUpperCase())).length;
+      const sp = splitGlued(w);
+      if (sp && occurrences <= 1) { issues.push(`"${w}" → ¿"${sp}"?`); fixed = fixed.replace(w, sp); }
+    }
+    const heads: string[] = fixed.toUpperCase().match(/\b(LIGHTING|LIGHTS?|LAMPS?|POLES?)\b/g) ?? [];
+    const dup = heads.find((h, i) => heads.indexOf(h) !== i);
+    if (dup && !/\(/.test(fixed)) {
+      // "STREET LIGHTING LED LIGHTING" → dos productos que terminan en el mismo sustantivo
+      const parts = fixed.split(new RegExp(`(?<=\\b${dup}\\b)\\s+`, 'i')).filter(Boolean);
+      issues.push(`"${it}" parece contener ${parts.length} productos`);
+      suggestion.push(...parts);
+    } else suggestion.push(fixed);
+  }
+  return { issues, suggestion };
+}
+
+/** Parte del renglón original (con sus dobles espacios) que sigue al encabezado de la lista. */
+function rawAfterHeader(raw: string, tail: string): string {
+  if (!tail) return '';
+  const r = nfkc(raw); const i = r.toLowerCase().lastIndexOf(tail.slice(0, 6).toLowerCase());
+  return i >= 0 ? r.slice(i) : tail;
+}
+
+function splitItems(t: string): string[] {
+  const out: string[] = [];
+  for (const chunk of t.split(/[;；,，、]|\s[•·]\s/)) {
+    // Un espacio ancho separa dos productos solo si ambos lados tienen ≥ 2 palabras
+    // ("STREET LIGHTING  LED LIGHTING" → 2; "ALUMINIUM  POLE" → 1, es espaciado tipográfico).
+    const parts = chunk.split(/\s{2,}/).map((x) => x.trim()).filter(Boolean);
+    const merged: string[] = [];
+    for (const p of parts) {
+      const prev = merged[merged.length - 1];
+      if (prev !== undefined && (prev.split(' ').length < 2 || p.split(' ').length < 2)) merged[merged.length - 1] = `${prev} ${p}`;
+      else merged.push(p);
+    }
+    out.push(...merged);
+  }
+  return out.map((x) => cleanSpaces(x).replace(/^[-•·*\d.)\s]+/, '')).filter((x) => x.length >= 2);
+}
+
+/** Renglón que puede pertenecer a una lista de productos (no es un dato de contacto ni una etiqueta). */
+function isProductItem(t: string, raw: string): boolean {
+  if (/@|www\.|https?:|\d{6,}/.test(raw) || findLabels(nfkc(raw)).length) return false;
+  if (COMPANY_EN_STRONG.test(t) || COMPANY_CN_STRONG.test(t)) return false;
+  return t.length <= 80;
 }
 
 function isEnglishName(t: string): boolean {
   const s = t.replace(/^(mr|ms|mrs|miss)\.?\s+/i, '').trim();
-  if (s.length > 32 || NAME_STOPWORDS.test(s) || /\d|@/.test(s)) return false;
+  if (s.length > 32 || NAME_STOPWORDS.test(s) || PRODUCT_WORDS.test(s) || /\d|@/.test(s)) return false;
   return /^[A-Z][a-z]+(?:[ -][A-Z][a-z]+){1,2}$/.test(s) || /^[A-Z]{2,}(?: [A-Z]{2,}){1,2}$/.test(s) || /^[A-Z][a-z]+ [A-Z]{2,}$/.test(s);
 }
 

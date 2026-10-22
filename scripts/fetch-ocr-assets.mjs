@@ -15,6 +15,20 @@ const MODELS = ['PP-OCRv5_mobile_det', 'PP-OCRv5_mobile_rec', 'PP-OCRv6_tiny_det
 const TESS_LANGS = ['eng', 'chi_sim'];
 const TESS_DATA = (l) => `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${l}/4.0.0_best_int/${l}.traineddata.gz`;
 
+/** Extrae un archivo (por nombre base) de un tar ustar sin comprimir. */
+function extractFromTar(buf, baseName) {
+  for (let off = 0; off + 512 <= buf.length;) {
+    const name = buf.subarray(off, off + 100).toString('utf8').replace(/\0.*$/s, '');
+    if (!name) break;
+    const size = parseInt(buf.subarray(off + 124, off + 136).toString('utf8').replace(/\0.*$/s, '').trim() || '0', 8);
+    const prefix = buf.subarray(off + 345, off + 500).toString('utf8').replace(/\0.*$/s, '');
+    const full = prefix ? `${prefix}/${name}` : name;
+    if (full.split('/').pop() === baseName && !full.includes('.cache')) return buf.subarray(off + 512, off + 512 + size);
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return null;
+}
+
 async function download(url, dest) {
   if (existsSync(dest) && (await stat(dest)).size > 0) return;
   console.log('↓', url);
@@ -32,6 +46,15 @@ for (const m of MODELS) {
   const file = `${m}_onnx_infer.tar`;
   await download(`${MODEL_BASE}/${file}`, path.join(cache, file));
   await copyFile(path.join(cache, file), path.join(out, 'models', file));
+}
+
+// Clasificador de orientación de documento (0/90/180/270°), modelo oficial PaddlePaddle en ONNX.
+{
+  const file = 'PP-LCNet_x1_0_doc_ori_onnx_infer.tar';
+  await download(`${MODEL_BASE}/${file}`, path.join(cache, file));
+  const onnx = extractFromTar(await readFile(path.join(cache, file)), 'inference.onnx');
+  if (!onnx) throw new Error('inference.onnx no encontrado en ' + file);
+  await writeFile(path.join(out, 'models', 'PP-LCNet_x1_0_doc_ori.onnx'), onnx);
 }
 
 // ONNX Runtime Web: debe coincidir con la versión embebida en el worker de paddleocr-js (1.24.3).

@@ -113,3 +113,77 @@ Comandos: `npm run build` (incluye `tsc --noEmit`), `npm test`, `npm run test:e2
 | D1 | `/ocr-lab.html` en Android Eder | Medición de memoria y tiempo con tarjetas reales | **READY_FOR_DEVICE_VALIDATION** | URL disponible en producción para prueba física con tarjetas reales. |
 | D2 | `/ocr-lab.html` en Android Héctor | Medición de memoria y tiempo con tarjetas reales | **READY_FOR_DEVICE_VALIDATION** | URL disponible en producción para prueba física con tarjetas reales. |
 
+
+---
+
+# v1.2 — Smart Document Scanner (rama `feat/smart-document-scanner`)
+
+Fecha: 2026-10-22 · Entorno: macOS (Apple Silicon), Node 22.23, Chromium headless con emulación Pixel 7.
+
+Ejecutado **con** el directorio privado de fixtures reales ([PRIVATE_FIXTURES.md](PRIVATE_FIXTURES.md)). La tarjeta real del registro `CF26F2-EDR-HDHG-0001` aparece como **R1** y sus valores no se publican. Registros en `test-logs/` (no versionado).
+
+## Comandos obligatorios
+
+| Comando | Resultado |
+|---|---|
+| `npm test` | **PASS 79/79** (11 archivos). Sin el directorio privado: 77 PASS y 2 omitidas (no cuentan como PASS) |
+| `npm run build` | **PASS**, precache 68 MB |
+| `npm run test:e2e` | **PASS 5/5**, 2,4 min (incluye la E2E con R1 a través de la interfaz) |
+| `npm run ocr:eval` | **PASS**: PaddleOCR 64/64 (scan) y 63/64 (foto); Tesseract 64/64 y 50/64. Sin regresiones |
+| `npm run scanner:eval` | Orientación **22/22** (1 OCR por cara); campos sintéticos 102/105; **R1 16/17** (FAIL: lista de productos, marcada para revisión) |
+| `npm run check:private` | **PASS** sobre el árbol y la historia publicada (ver «Privacidad») |
+
+## Matriz de validación
+
+| | Qué se valida | Referencia independiente | Resultado |
+|---|---|---|---|
+| A | Detección del documento | 24 casos: R1 (2 caras × 4 rotaciones exactas) + 16 escenas sintéticas, incluida una página A4 | **24/24** según lo esperado (21 recortes; 3 a revisión: varias tarjetas, fuera del encuadre, tarjeta oscura) |
+| B | Cuatro esquinas | Esquinas de R1 anotadas a mano; sintéticas por homografía | R1 ≤ **0,31 %** de la diagonal; sintéticas ≤ 0,05 % |
+| C | Recorte y fondo | Cobertura ≥ 98,5 % y fondo ≤ 1,5 % por muestreo geométrico | R1: cobertura ≥ 99,8 %, fondo ≤ 0,63 % |
+| D | Perspectiva | Derivada de B; la procesada de R1 es apaisada (E2E) | PASS |
+| E | Orientación | Rotación esperada por caso | **22/22** |
+| F | OCR | CER (`ocr:eval`) y texto de R1 | CER en fotos 0,5 %. R1: anverso completo; reverso con espacios perdidos en 3 renglones |
+| G | Extracción comercial | Resultado esperado (privado), campo a campo | R1 **16/17**; sintéticas 102/105 (los 3 fallos son texto tapado por dedos, que se deja vacío) |
+| H | Integridad | SHA-256 de los originales = archivos de Drive; el original no cambia; la procesada no sobrescribe | PASS |
+| I | Memoria y tiempo | RSS máxima y tiempo por cara | Estándar 1182 MB y 1,3 s/cara; **bajo 1018 MB** (≈ PaddleOCR solo) y 2,2 s/cara |
+| J | Captura consecutiva | «Guardar y siguiente» < 3 s mientras se procesa R1 (E2E) | PASS |
+
+### R1: productos (el único FAIL)
+
+| Producto impreso | Resultado |
+|---|---|
+| STREET LIGHTING | **FALLA**: leído junto al siguiente como `STREETLIGHTING LED LIGHTING` |
+| LED LIGHTING | **FALLA**: no aparece como elemento propio |
+| HIGH MAST POLE | espacio perdido en perfil estándar (`HIGH MASTPOLE`); exacto en perfil bajo |
+| COMMUNICATION POLE | espacio perdido (`COMMUNICATIONPOLE`) |
+| Los 6 restantes | exactos (incluida la errata impresa `GARDEN LIGHING POLE`) |
+
+**Recuento estricto:** 6/10 (estándar) y 7/10 (bajo); las letras se conservan en 8/10. El «8/10 exactos» del informe v1.1 contaba sin espacios y queda corregido.
+
+El campo se conserva tal como se leyó, queda en **`review`** con el motivo (las cuatro incidencias) y ofrece como candidato la separación sugerida, que coincide con la lista impresa. No se aprueba como exacto.
+
+## Cambios de esta versión (v1.2) y pruebas que los cubren
+
+| Cambio | Pruebas |
+|---|---|
+| **Privacidad**: fixtures reales y valores fuera del repositorio; tarjeta gemela ficticia; verificador anti-fuga; historia de la rama reconstruida sin datos reales | `tests/extract-structure.test.ts`, `tests/private-real-cards.test.ts` (se omite sin directorio privado), `npm run check:private` |
+| **Vista previa aislada**: otro origen (Cloudflare Pages) + instancia `preview` (base de datos propia, bloqueo de recursos de producción) | `tests/config-guard.test.ts`; `deploy-preview.mjs --dry-run` (verificado: rechaza `*.github.io` y recursos de producción) |
+| **Respaldo obligatorio de originales** en Drive restringido (doble destino por evidencia) | `tests/scanner-pipeline.test.ts` (respaldo, bordes dudosos en ambos destinos, fallo del respaldo → no confirma, respaldo de originales históricos), E2E R1 |
+| **Productos ambiguos** marcados para revisión sin alterar lo leído | `tests/extract-structure.test.ts` (palabras pegadas, dos productos en un renglón, sin falsos positivos) |
+| **Control de memoria y recuperación** (perfiles, alternancia, marcador de caída, degradación, vigilancia, liberación por inactividad) | `tests/resources.test.ts` (7 pruebas) + medición en navegador (I) |
+| **Motor reutilizable + perfiles** (`processDocument`, `business_card`, `a4_document`) | `tests/resources.test.ts` (perfil A4), `scanner-detect` (página A4) |
+
+## Privacidad
+
+- `git grep` y `scripts/check-private-data.mjs` sobre la rama publicada: **0 coincidencias** de los patrones privados. Los patrones (nombre, teléfonos, correo, QQ, dirección, IDs de Drive, huellas de los archivos) también se guardan fuera del repositorio.
+- La rama se reconstruyó desde `restore/pre-smart-scanner` en commits nuevos. **Ninguna versión anterior con fotografías o datos reales se subió nunca a GitHub**: esos commits solo existieron en la copia local.
+- `origin/main` no contenía datos de R1. Contiene correos de cuentas operativas (Eder, Héctor) en `CLAUDE_UX_UI_HANDOFF.md` y `.env.test`, aportados por Antigravity. Se dejaron como están porque esta entrega no modifica `main`; conviene que Eder decida si deben retirarse.
+
+## Pendientes para los dispositivos Android (handoff V4)
+
+| # | Pendiente | Por qué importa |
+|---|---|---|
+| D1/D2 | Medir en el Android de Eder y en el de Héctor (`ocr-lab.html` de la vista previa): tiempos por etapa, `deviceMemory`, recargas de la pestaña | Toda la medición actual es de escritorio; la memoria (~1,0–1,2 GB de pico en escritorio) es el riesgo principal |
+| D3/D4 | 10 capturas seguidas en perfil estándar y en bajo | Validar que la alternancia y la recuperación evitan cierres; ajustar el umbral de 4 GB |
+| S1–S8 | Flujo completo contra Drive y Sheets **de prueba** desde la vista previa aislada | Las subidas reales de la versión procesada, del respaldo y de `ocr_extras` solo se han probado con simulaciones y emulador |
+| V5 | Reproceso de `CF26F2-EDR-HDHG-0001` en producción, tras la promoción | La vista previa aislada no puede (ni debe) ver ese registro |

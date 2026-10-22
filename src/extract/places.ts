@@ -36,7 +36,15 @@ function firstMatch(text: string, table: [string, string][], cnSuffix: RegExp): 
 
 export function findPlaces(text: string): { city?: string; province?: string } {
   if (!text) return {};
-  const city = firstMatch(text, CITIES, /(市)?/);
+  let city: { name: string; at: number } | undefined = firstMatch(text, CITIES, /(市)?/);
   const province = firstMatch(text, PROVINCES.filter(([en]) => !MUNICIPALITIES.has(en) || !city || city.name !== en), /(省|壮族自治区|自治区)?/);
+  // Ciudad explícita fuera de la tabla: "Cixi City" / "慈溪市" (se toma el nombre tal como está impreso)
+  if (!city) {
+    const en = text.match(/\b([A-Z][a-z]{2,})\s+City\b/);
+    const cn = text.match(/(?:省|自治区)?([\u4e00-\u9fff]{2,3}?)市/);
+    const cand = [en && { name: en[1], at: en.index! }, cn && !PROVINCES.some(([, p]) => cn[1].includes(p)) && { name: cn[1], at: cn.index! }]
+      .filter(Boolean) as { name: string; at: number }[];
+    city = cand.sort((a, b) => a.at - b.at)[0];
+  }
   return { city: city?.name, province: province && province.name !== city?.name ? province.name : undefined };
 }

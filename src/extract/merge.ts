@@ -4,7 +4,7 @@
 // - Los campos bloqueados por una corrección humana confirmada nunca se modifican.
 
 import { OCR_FIELDS, type Capture, type FieldMeta, type FieldSource, type OcrField, type OcrStatus } from '../domain/schema';
-import type { FieldCandidate, Hit, SideExtraction } from './entities';
+import type { FieldCandidate, Hit, SideExtraction, SideExtras } from './entities';
 import { isCjkDominant, sameValue } from './normalize';
 
 export interface MergeResult {
@@ -12,7 +12,7 @@ export interface MergeResult {
   meta: Partial<Record<OcrField, FieldMeta>>;
   status: Extract<OcrStatus, 'EXTRAIDO' | 'REQUIERE_REVISION'>;
   reviewFields: OcrField[];
-  extras: { fax: string[]; qq: string[] };
+  extras: SideExtras;
 }
 
 const BILINGUAL = new Set<OcrField>(['company_name', 'contact_name', 'job_title', 'main_products']);
@@ -78,7 +78,8 @@ export function mergeSides(front: SideExtraction, back: SideExtraction | undefin
   const hasChannel = ['phone_1', 'email', 'wechat', 'whatsapp', 'website'].some((f) => effective(f as OcrField));
   const status = reviewFields.length || !hasCompany || !hasChannel ? 'REQUIERE_REVISION' : 'EXTRAIDO';
 
-  const extras = { fax: uniq([...front.extras.fax, ...(back?.extras.fax ?? [])]), qq: uniq([...front.extras.qq, ...(back?.extras.qq ?? [])]) };
+  const ex = (k: keyof SideExtras) => uniq([...front.extras[k], ...(back?.extras[k] ?? [])]);
+  const extras: SideExtras = { fax: ex('fax'), qq: ex('qq'), postal_code: ex('postal_code'), secondary_companies: ex('secondary_companies') };
   return { fields, meta, status, reviewFields, extras };
 }
 

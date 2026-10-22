@@ -12,6 +12,11 @@ Todas las variables `VITE_*` se **incrustan en el JavaScript público**. Ninguna
 | `VITE_SHEETS_SPREADSHEET_ID` | con `google` | `1XyZ...` | Spreadsheet de **Fase 2** |
 | `VITE_SHEETS_TAB_NAME` | no | `CAPTURA_FASE2` | Pestaña destino |
 | `VITE_PHASE1_SPREADSHEET_ID` | recomendada | `1Fase1...` | ID del archivo de Fase 1; si coincide con el de Fase 2 la app bloquea la sincronización |
+| `VITE_DRIVE_ORIGINALS_FOLDER_ID` | **sí** con Google y escáner | `1Orig…` | **Respaldo restringido de originales** (`…/2026_CANTON_FAIR/ORIGINALES_FASE2`): todas las fotos originales de tarjetas, sin recortar. Debe ser distinta de `EVIDENCIAS_FASE2` y estar compartida solo con Eder, Héctor y auditoría. Sin ella, la sincronización se bloquea |
+| `VITE_INSTANCE` | no | `production` | `production` o el nombre de una instancia aislada (`preview`): base de datos local propia, franja «VISTA PREVIA» y bloqueo de los recursos de producción |
+| `VITE_PRODUCTION_SPREADSHEET_ID`, `VITE_PRODUCTION_DRIVE_FOLDER_ID`, `VITE_PRODUCTION_ORIGINALS_FOLDER_ID` | sí en instancias no productivas | IDs de producción | La vista previa se niega a sincronizar contra ellos (y `deploy-preview.mjs` se niega a publicar) |
+| `CX_PRIVATE_DIR` | no (solo pruebas locales) | `/ruta/privada` | Directorio PRIVADO de fixtures reales (por defecto `../colescomex-private-fixtures`). No es una variable `VITE_`: nunca llega al navegador |
+| `VITE_SCANNER` | no | `on` | Smart Document Scanner (recorte, enderezado, orientación). `off` vuelve al comportamiento de la v1.0 |
 | `VITE_OCR_ENGINE` | no | `paddle` | `paddle` (defecto), `tesseract`, `remote`, `mock` |
 | `VITE_OCR_REMOTE_URL` | con `remote` | `https://ocr-xxxx.run.app/ocr` | Backend OCR propio (ver contratos §4) |
 

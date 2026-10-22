@@ -9,3 +9,5 @@ ocr-eval/results/*.json
 .env.local
 .env.*.local
 .env.test
+ocr-eval/scanner-fixtures/
+test-logs/

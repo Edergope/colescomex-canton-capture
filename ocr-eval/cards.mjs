@@ -93,7 +93,7 @@ export const CARDS = [
 <div class="en big">Main Products: Power Banks, USB Chargers, Bluetooth Speakers</div>
 <div class="en">Booth No.: 9.2 D18-19</div>
 <div class="en">Add: 3F, Building A, Hi-Tech Park, Nanshan District, Shenzhen, Guangdong, China</div>`,
-    expect: { main_products: 'Power Banks, USB Chargers, Bluetooth Speakers', hall: '9.2', booth: 'D18-19', city: 'Shenzhen', province: 'Guangdong' },
+    expect: { main_products: 'Power Banks; USB Chargers; Bluetooth Speakers', hall: '9.2', booth: 'D18-19', city: 'Shenzhen', province: 'Guangdong' },
   },
   {
     id: 'c5', side: 'front', style: 'light dense',

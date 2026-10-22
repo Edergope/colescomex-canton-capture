@@ -8,9 +8,18 @@ PWA móvil, offline-first, para que **Eder y Héctor** capturen proveedores en l
 
 | Componente | Estado |
 |---|---|
+| **v1.2 Smart Document Scanner**: detección de la tarjeta, recorte sin manos ni fondo, perspectiva, orientación automática 0/90/180/270°, motor reutilizable por tipo de documento, control de memoria para Android | **Implementado y probado** con fotos reales privadas (rama `feat/smart-document-scanner`, ver [docs/SMART_SCANNER.md](docs/SMART_SCANNER.md)); **pendiente de validación en Android** y no publicado |
 | Captura, almacenamiento local, cola OCR, parser, sincronización con reintentos | **Implementado y probado** (ver [docs/TEST_REPORT.md](docs/TEST_REPORT.md)) |
 | OCR en el navegador (PaddleOCR.js, chino + inglés) | **Implementado y medido** en Chromium (ver [docs/OCR_EVALUATION.md](docs/OCR_EVALUATION.md)) |
 | Adaptadores Google (OAuth, Drive, Sheets) | **Escritos y probados contra un emulador, NO verificados con Google real.** Los conecta Antigravity: [ANTIGRAVITY_HANDOFF.md](ANTIGRAVITY_HANDOFF.md) |
+
+## Privacidad
+
+El repositorio es público. **No versionar fotografías reales de tarjetas, datos de contacto ni salidas con valores reales.** Las pruebas con tarjetas reales leen un directorio privado fuera del repositorio ([docs/PRIVATE_FIXTURES.md](docs/PRIVATE_FIXTURES.md)) y se omiten si no está disponible. Antes de subir cualquier rama:
+
+```bash
+npm run check:private
+```
 
 ## Requisitos
 
@@ -73,6 +82,12 @@ npm run ocr:fixtures && npm run ocr:eval
 
 Banco de evaluación OCR (PaddleOCR vs Tesseract.js) — resultados en `ocr-eval/results/`.
 
+```bash
+npm run scanner:eval
+```
+
+Evaluación de extremo a extremo del escáner (recorte + orientación + OCR + parser) con las fotos reales de CF26F2-EDR-HDHG-0001 y escenas sintéticas. Resultados en `ocr-eval/results/scanner-eval.json`; imágenes en `docs/scanner/`.
+
 Para probar con **tarjetas reales en el teléfono**: abrir `/ocr-lab.html` de la app desplegada, elegir motor y fotografiar una tarjeta (no guarda nada).
 
 ## Arquitectura
@@ -93,6 +108,8 @@ Cámara/galería ──► Asistente de captura ──► IndexedDB (transacció
 | `src/domain/` | Esquema comercial (29 columnas), columnas técnicas, IDs (`uuid`, `external_ref`) |
 | `src/storage/` | IndexedDB (`idb`): capturas, evidencias (Blob), resultados OCR, metadatos, auditoría |
 | `src/ocr/` | `OCRAdapter` + PaddleOCR (por defecto), Tesseract.js, remoto (backend), mock |
+| `src/scanner/` | Motor reutilizable de documentos (`processDocument`): detección, homografía, clasificador de orientación (ONNX), `DocumentOrientation`, Worker; perfiles por tipo de documento (`profiles.ts`) |
+| `src/pipeline/resources.ts` | Control de memoria y recuperación para Android (perfiles `standard`/`low`, alternancia escáner↔OCR, marcador de caída, degradación por intentos) |
 | `src/extract/` | Texto OCR → entidades → normalización → validación → fusión frontal/reverso |
 | `src/pipeline/ocrQueue.ts` | Procesamiento asíncrono con estados `CAPTURADO → PROCESANDO → EXTRAIDO / REQUIERE_REVISION / ERROR` |
 | `src/sync/` | Motor de sincronización y construcción de la fila de Sheets |
@@ -125,5 +142,7 @@ Cámara/galería ──► Asistente de captura ──► IndexedDB (transacció
 - [ANTIGRAVITY_HANDOFF.md](ANTIGRAVITY_HANDOFF.md) — pasos para conectar Google, desplegar y probar de extremo a extremo
 - [docs/INTEGRATION_CONTRACTS.md](docs/INTEGRATION_CONTRACTS.md) — contratos de adaptadores, columnas de Sheets, estructura de Drive
 - [docs/ENV_VARS.md](docs/ENV_VARS.md) — variables y credenciales necesarias (sin secretos)
+- [docs/SMART_SCANNER.md](docs/SMART_SCANNER.md) — escáner de documentos: arquitectura reutilizable, métricas, memoria, limitaciones
+- [docs/PRIVATE_FIXTURES.md](docs/PRIVATE_FIXTURES.md) — fotografías y datos reales de prueba (fuera del repositorio)
 - [docs/OCR_EVALUATION.md](docs/OCR_EVALUATION.md) — evaluación PaddleOCR vs Tesseract.js
 - [docs/TEST_REPORT.md](docs/TEST_REPORT.md) — informe PASS/FAIL y limitaciones reales

@@ -1,11 +1,12 @@
 import { h, mount, toast, pickFiles, blobUrl, releaseUrls } from './dom';
 import type { CaptureApp } from '../app/service';
 import {
-  EDITABLE_FIELDS, EVIDENCE_LABELS, SYNC_LABELS, type Capture, type CommercialField, type EvidenceKind, type FieldMeta,
+  EDITABLE_FIELDS, EVIDENCE_LABELS, SYNC_LABELS, type Capture, type CommercialField, type Evidence, type EvidenceKind, type FieldMeta,
   type OcrStatus, type SyncStatus, type UserProfile,
 } from '../domain/schema';
-import type { QuickFields } from '../storage/repo';
+import { primaryEvidences, type QuickFields } from '../storage/repo';
 import { AuthRequiredError, NotAuthorizedError } from '../adapters/contracts';
+import { storagePressure } from '../pipeline/resources';
 
 const FIELD_LABELS: Partial<Record<CommercialField, string>> = {
   company_name: 'Empresa (inglés)', company_name_cn: 'Empresa (chino)', contact_name: 'Contacto', job_title: 'Cargo',
@@ -124,8 +125,11 @@ export class UI {
   }
 
   // ───────────────────────── Inicio ─────────────────────────
+  private storageWarn = '';
   private async homeView() {
     const c = await this.app.counts();
+    const sp = await storagePressure().catch(() => null);
+    this.storageWarn = sp && sp.ratio > 0.85 ? `Almacenamiento del teléfono casi lleno (${sp.usageMb} de ${sp.quotaMb} MB). Sincronice con Google; las fotos ya respaldadas pueden liberarse más adelante.` : '';
     const rep = this.app.sync.lastReport;
     if (rep?.authRequired) this.authProblem = true;
     return [
@@ -135,6 +139,10 @@ export class UI {
         this.draft.evidences.length > 0 && h('div', { class: 'banner warn' }, `Hay una captura sin terminar (${this.draft.evidences.length} foto(s)). Pulsa «Registrar proveedor» para continuarla.`),
         !navigator.onLine && h('div', { class: 'banner info' }, 'Sin conexión: puedes seguir capturando. Todo queda guardado en el teléfono y se sincroniza al volver la conexión.'),
         this.info.storage && !this.info.storage.persisted && h('div', { class: 'banner warn' }, 'El navegador no garantizó almacenamiento persistente. Instala la app (Añadir a pantalla de inicio) y sincroniza con frecuencia.'),
+        this.app.governor?.profile === 'low' && h('div', { class: 'banner info', id: 'low-memory' },
+          `Modo de bajo consumo de memoria activo (${this.app.governor.state.reason}). El escáner y el OCR se alternan; el proceso es más lento pero más estable. `,
+          h('button', { class: 'btn small', onClick: async () => { await this.app.governor!.setProfile('standard', 'elegido por el usuario'); void this.render(true); } }, 'Usar modo estándar')),
+        this.storageWarn && h('div', { class: 'banner warn', id: 'storage-warn' }, this.storageWarn),
         this.authProblem && h('div', { class: 'banner err' }, 'La sesión de Google expiró. ',
           h('button', { class: 'btn small', onClick: () => this.reconnect() }, 'Reconectar Google')),
         h('div', { class: 'card' },
@@ -265,7 +273,7 @@ export class UI {
       const ql = q.trim().toLowerCase();
       const shown = ql ? items.filter((c) => [c.external_ref, c.fields.company_name, c.fields.company_name_cn, c.fields.contact_name, c.fields.booth].join(' ').toLowerCase().includes(ql)) : items;
       const nodes = await Promise.all(shown.map(async (c) => {
-        const front = (await this.app.repo.evidences(c.uuid)).find((e) => e.kind === 'card_front');
+        const front = primaryEvidences(await this.app.repo.evidences(c.uuid)).find((e) => e.kind === 'card_front');
         return h('button', { class: 'item', 'data-ref': c.external_ref, onClick: () => this.go({ name: 'detail', uuid: c.uuid }) },
           front ? h('img', { class: 'ph', src: blobUrl(front.blob), alt: '' }) : h('div', { class: 'ph' }),
           h('div', { style: 'min-width:0' },
@@ -283,6 +291,48 @@ export class UI {
         h('input', { class: 'text', type: 'search', placeholder: 'Buscar empresa, contacto, ref, stand…', onInput: (e: Event) => void fill((e.target as HTMLInputElement).value) }),
         listEl),
     ];
+  }
+
+  // ───────────────────────── Ajuste manual de esquinas (excepcional) ─────────────────────────
+  private async openCornerEditor(ev: Evidence) {
+    const img = h('img', { src: blobUrl(ev.blob), alt: 'Foto original', class: 'ce-img' }) as HTMLImageElement;
+    await img.decode().catch(() => undefined);
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const start = (ev.scan?.manual_quad ?? ev.scan?.quad ?? [{ x: W * 0.1, y: H * 0.1 }, { x: W * 0.9, y: H * 0.1 }, { x: W * 0.9, y: H * 0.9 }, { x: W * 0.1, y: H * 0.9 }]).map((p) => ({ ...p }));
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'ce-svg');
+    const poly = document.createElementNS(svg.namespaceURI, 'polygon');
+    poly.setAttribute('class', 'ce-poly'); svg.appendChild(poly);
+    const r = Math.max(W, H) * 0.025;
+    const handles = start.map((_, i) => {
+      const c = document.createElementNS(svg.namespaceURI, 'circle');
+      c.setAttribute('r', String(r)); c.setAttribute('class', 'ce-handle'); c.setAttribute('data-i', String(i));
+      svg.appendChild(c); return c;
+    });
+    const draw = () => {
+      poly.setAttribute('points', start.map((p) => `${p.x},${p.y}`).join(' '));
+      handles.forEach((c, i) => { c.setAttribute('cx', String(start[i].x)); c.setAttribute('cy', String(start[i].y)); });
+    };
+    draw();
+    let drag = -1;
+    const toImg = (e: PointerEvent) => { const b = svg.getBoundingClientRect(); return { x: ((e.clientX - b.left) / b.width) * W, y: ((e.clientY - b.top) / b.height) * H }; };
+    svg.addEventListener('pointerdown', (e) => {
+      const p = toImg(e);
+      // la esquina más cercana al dedo (no hace falta acertar el punto exacto)
+      drag = start.reduce((m, q, i) => (Math.hypot(q.x - p.x, q.y - p.y) < Math.hypot(start[m].x - p.x, start[m].y - p.y) ? i : m), 0);
+      svg.setPointerCapture(e.pointerId);
+    });
+    svg.addEventListener('pointermove', (e) => { if (drag < 0) return; const p = toImg(e); start[drag] = { x: Math.max(0, Math.min(W, p.x)), y: Math.max(0, Math.min(H, p.y)) }; draw(); });
+    svg.addEventListener('pointerup', () => { drag = -1; });
+    const close = () => overlay.remove();
+    const overlay = h('div', { class: 'ce-overlay', role: 'dialog', 'aria-label': 'Ajustar esquinas' },
+      h('div', { class: 'ce-stage' }, img, svg),
+      h('p', { class: 'small', style: 'color:#fff;margin:8px 0' }, 'Arrastra las 4 esquinas hasta los bordes de la tarjeta. La foto original no se modifica.'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onClick: close }, 'Cancelar'),
+        ev.scan?.manual_quad ? h('button', { class: 'btn', onClick: async () => { await this.app.setManualCorners(ev.id, undefined); close(); toast('Se volverá a detectar automáticamente'); } }, 'Volver a automático') : null,
+        h('button', { class: 'btn primary', id: 'ce-save', onClick: async () => { await this.app.setManualCorners(ev.id, start); close(); toast('Esquinas guardadas · reprocesando'); } }, 'Guardar y reprocesar')));
+    document.body.appendChild(overlay);
   }
 
   // ───────────────────────── Detalle / corrección ─────────────────────────
@@ -323,9 +373,11 @@ export class UI {
           h('p', { class: 'muted small' }, `Capturado por ${c.fields.captured_by} · ${new Date(c.created_at).toLocaleString()} · rev. ${c.revision}`),
           c.ocr_error && h('div', { class: 'banner err' }, `OCR: ${c.ocr_error}`),
           c.sync_error && h('div', { class: 'banner err' }, `Sincronización: ${c.sync_error}`),
-          c.ocr_extras?.fax.length ? h('p', { class: 'muted small' }, `Fax: ${c.ocr_extras.fax.join(', ')}`) : null,
+          c.scan_issues?.length ? h('div', { class: 'banner warn', id: 'scan-issues' }, c.scan_issues.join(' · ')) : null,
+          extrasView(c),
           h('p', { class: 'muted small' }, 'Estado de captura ≠ aprobación: este registro es información inicial, no un proveedor aprobado.'),
-          h('div', { class: 'thumbs' }, evs.map((e) => thumb(e))),
+          h('div', { class: 'thumbs', id: 'evidence-thumbs' }, primaryEvidences(evs).map((e) => thumb(e))),
+          cardScanControls(evs, (ev) => this.openCornerEditor(ev)),
           h('div', { class: 'row', style: 'margin-top:10px' },
             h('button', { class: 'btn small', id: 'btn-reprocess', disabled: c.ocr_status === 'PROCESANDO', onClick: async () => { await this.app.reprocessOcr(uuid); toast('OCR en cola'); } }, '↻ Reprocesar OCR'),
             h('button', { class: 'btn small', id: 'btn-confirm', onClick: async () => { if (form.dataset.dirty === '1') { toast('Guarda primero las correcciones'); return; } await this.app.confirmReview(uuid); toast('Revisión confirmada'); void this.render(true); } }, '✔ Confirmar revisión'),
@@ -338,6 +390,36 @@ export class UI {
           h('p', { class: 'muted small' }, `UUID ${c.uuid}`))),
     ];
   }
+}
+
+/** Datos adicionales sin columna comercial: segunda empresa, QQ, código postal, fax. */
+function extrasView(c: Capture) {
+  const x = c.ocr_extras;
+  if (!x) return null;
+  const rows: [string, string[] | undefined][] = [['Otra empresa impresa', x.secondary_companies], ['Fax', x.fax], ['QQ', x.qq], ['Código postal', x.postal_code]];
+  const shown = rows.filter(([, v]) => v?.length);
+  if (!shown.length) return null;
+  return h('div', { class: 'extras', id: 'ocr-extras' }, shown.map(([k, v]) => h('div', { class: 'small' }, h('b', null, `${k}: `), v!.join(' · '))));
+}
+
+const SCAN_LABEL: Record<string, [string, string]> = {
+  ok: ['Recortada y enderezada', 'ok'], manual: ['Esquinas ajustadas a mano', 'ok'],
+  low_confidence: ['Bordes dudosos: foto original', 'warn'], not_found: ['Bordes no detectados: foto original', 'warn'],
+};
+
+/** Estado del escaneo de cada cara + acceso (excepcional) al ajuste manual de esquinas. */
+function cardScanControls(evs: Evidence[], onAdjust: (ev: Evidence) => void) {
+  const originals = evs.filter((e) => (e.kind === 'card_front' || e.kind === 'card_back') && e.role !== 'processed');
+  if (!originals.some((e) => e.scan)) return null;
+  return h('div', { class: 'scanrows' }, originals.map((e) => {
+    const sc = e.scan; if (!sc) return null;
+    const [label, cls] = sc.multiple ? ['Varias tarjetas: foto original', 'warn'] : SCAN_LABEL[sc.status] ?? ['—', ''];
+    return h('div', { class: 'row small', 'data-scan': `${e.kind}:${sc.status}` },
+      h('span', { class: `chip ${cls}` }, `${e.kind === 'card_front' ? 'Frontal' : 'Reverso'}: ${label}`),
+      sc.rotation ? h('span', { class: 'chip' }, `↻ ${sc.rotation}°`) : null,
+      h('button', { class: 'btn small', onClick: () => window.open(blobUrl(e.blob), '_blank') }, 'Ver original'),
+      h('button', { class: 'btn small', 'data-adjust': e.kind, onClick: () => onAdjust(e) }, 'Ajustar esquinas'));
+  }));
 }
 
 function emptyDraft(): Draft { return { step: 'front', evidences: [], quick: {} }; }

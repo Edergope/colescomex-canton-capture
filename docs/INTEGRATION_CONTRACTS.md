@@ -116,3 +116,73 @@ El backend (p. ej. Cloud Run + Google Cloud Vision `DOCUMENT_TEXT_DETECTION`) va
 5. `synced_revision = revisión enviada`; `CONFIRMADO` si no hubo cambios entretanto, si no `PENDIENTE` y se repite.
 
 Cualquier fallo → `ERROR` con mensaje y reintento automático (5 s × 2ⁿ, máx. 10 min); disparadores: guardado, fin de OCR, edición, evento `online`, cada 60 s y botón «Sincronizar ahora». Los archivos locales nunca se borran automáticamente.
+
+## 6. Cambios de la versión 1.1 (Smart Document Scanner)
+
+Compatibles con lo anterior: no cambian las credenciales OAuth, las identidades EDR/HCT, la carpeta `EVIDENCIAS_FASE2`, el Spreadsheet de Fase 2, las 29 columnas comerciales, `capture_uuid`, `external_ref`, las reglas de revisión humana ni la sincronización offline. `src/adapters/google.ts` **no se modificó**.
+
+### 6.1 Evidencia original y evidencia procesada
+
+Antes, el contrato subía a la carpeta del proveedor la fotografía original sin transformar. Ahora cada foto de tarjeta tiene dos representaciones y **dos destinos independientes** en Drive:
+
+| Campo de `Evidence` | Original | Procesada |
+|---|---|---|
+| `role` | `original` (ausente en registros antiguos = original) | `processed` |
+| `derived_from` / `superseded_by` | — | id del original / id de la versión posterior si se reprocesó (no se borra) |
+| `sha256` | huella del archivo tal como lo entregó la cámara | huella del JPEG procesado |
+| `scan` | `status`, `confidence`, `quad`, `multiple`, `reasons`, `cropped`, `rotation`, `orientation_*`, `trials`, `processed_id`, `manual_quad`, `mode`, `ms` | — |
+| `remote_file_id` / `remote_url` | copia en la **carpeta del proveedor** (solo si no hubo recorte fiable, o registros antiguos) | copia en la carpeta del proveedor |
+| `archive_file_id` / `archive_url` | copia en el **respaldo restringido de originales** (siempre) | — |
+| Nombre | `<ref>_01_card_front.jpg` | `<ref>_01_card_front_scan.jpg` (`_scan_v2`… en reprocesos) |
+
+Plan de subida (`uploadPlan` en `src/sync/SyncEngine.ts`):
+
+| Situación | Carpeta del proveedor `EVIDENCIAS_FASE2/<ref>` | Respaldo restringido `ORIGINALES_FASE2/<ref>` |
+|---|---|---|
+| Tarjeta con recorte fiable | procesada | original |
+| Tarjeta sin recorte fiable (bordes dudosos, varias tarjetas) | original | original |
+| Tarjeta aún sin escanear | — (espera; captura `PENDIENTE`) | original (protección inmediata) |
+| Original de una versión anterior ya publicado en la carpeta | se deja como está (no se borra ni se sobrescribe) | original (se respalda) |
+| Stand, producto, catálogo, otra | original | — |
+| Procesada sustituida | se conserva si ya se subió; si no, no se sube | — |
+
+Reglas:
+- `CONFIRMADO` exige que cada cara de tarjeta tenga representación en la carpeta del proveedor **y** que todos sus originales estén en el respaldo.
+- Si el respaldo falla (por ejemplo, sin permiso), la captura queda en `ERROR` y se reintenta.
+- **Con Google real y escáner activo, `VITE_DRIVE_ORIGINALS_FOLDER_ID` es obligatoria**: sin ella, la sincronización se bloquea de forma visible. Los originales nunca dependen solo del teléfono.
+- El respaldo usa la misma implementación `GoogleDriveAdapter` con otra carpeta raíz (subcarpeta `<ref>`, `appProperties.capture_uuid`, idempotencia por `evidence_id`). `src/adapters/google.ts` no se modificó.
+- **Permisos**: la carpeta de respaldo debe compartirse solo con Eder, Héctor y quien audite (nunca «cualquier persona con el enlace»). Es la única ubicación con fotos que pueden mostrar manos o el entorno.
+
+### 6.2 Fila de Sheets
+
+- **Nueva columna técnica `ocr_extras`**, añadida al final de forma automática por el adaptador existente: `segunda_empresa=…; qq=…; codigo_postal=…; escaneo=<incidencias>`. No se renombra ni reordena ninguna columna existente.
+- `ocr_fax` sigue llevando el fax.
+- `evidence_files` etiqueta cada archivo: `card_front [escaneada]: url`, `card_front [original]: url` (carpeta del proveedor) y `card_front [original, respaldo restringido]: url`.
+- `review_fields` incluye `escaneo` si el escáner pidió revisión.
+- `processing_status` / `ocr_status`: una incidencia del escáner fuerza `REQUIERE_REVISION`.
+
+### 6.3 Motor reutilizable y perfiles de documento
+
+```ts
+processDocument({ ocr, scanner, governor }, { blob, profile, jobId, manualQuad?, mode? }) → ProcessedDocument
+// ProcessedDocument: { lines, rotation, analysis, orientation, processed?: Blob, issues: EngineIssue[], mode, ms, ocrError? }
+```
+
+`src/scanner/engine.ts` no sabe nada de tarjetas: detección, recorte, perspectiva, orientación y OCR. El tipo de documento aporta un `DocumentProfile` (`src/scanner/profiles.ts`) con la geometría esperada, la resolución de salida y la resolución del OCR. Perfiles incluidos: `business_card` (en uso) y `a4_document` (preparado para fichas técnicas, facturas y cotizaciones; detección verificada con una página A4 sintética). La interpretación del texto (parser) y la persistencia quedan fuera del motor: para cada nuevo tipo de documento se añadirá su parser.
+
+### 6.4 Interfaz `DocumentScanner` (reemplazable)
+
+```ts
+interface DocumentScanner { scan(blob: Blob, opts?: { manualQuad?: Quad }): Promise<ScanSession> }
+interface ScanSession {
+  analysis: ScanAnalysis;                                  // estado, esquinas, probabilidades de orientación, tiempos
+  render(rot: 0|1|2|3, opts?: { maxSide?; quality? }): Promise<Blob>;  // documento (o foto) girado, JPEG
+  release(): void;
+}
+```
+
+Implementación: `WorkerScanner` (`src/scanner/client.ts` + `scanner.worker.ts`), con `terminate()` para liberar toda su memoria. Sin escáner (`VITE_SCANNER=off`), el núcleo funciona como en la v1.0.
+
+### 6.5 Trazabilidad del OCR
+
+Antes de sustituir un resultado OCR, el anterior (motor, fecha, rotación y texto completo) queda en la auditoría como `OCR_RESULT_SUPERSEDED`. Otros eventos nuevos: `SCAN_PROCESSED`, `MANUAL_CORNERS` y `PROCESS_INTERRUPTED` (la pestaña se cerró durante una tarea pesada).

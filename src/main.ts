@@ -13,10 +13,11 @@ import { MockOCRAdapter } from './ocr/mock';
 import { PaddleOCRAdapter } from './ocr/paddle';
 import { TesseractOCRAdapter } from './ocr/tesseract';
 import { RemoteOCRAdapter } from './ocr/remote';
+import { WorkerScanner } from './scanner/client';
 
 async function boot() {
   // Sesión del usuario persistida en el dispositivo (permite capturar sin conexión).
-  const db = await openCaptureDB();
+  const db = await openCaptureDB(config.dbName);
   const sessionStore = {
     get: async () => ((await db.get('meta', 'session')) as UserProfile | null) ?? null,
     set: async (u: UserProfile | null) => { await db.put('meta', u, 'session'); },
@@ -26,6 +27,7 @@ async function boot() {
     : new MockAuth(config.users, sessionStore);
 
   let drive: DriveAdapter, sheets: SheetsAdapter;
+  let archiveDrive: DriveAdapter | undefined;
   if (config.syncMode === 'google' && configProblems().length) {
     // Nunca caer al mock en producción: sin configuración válida, la sincronización falla de forma visible.
     const blocked = async (): Promise<never> => { throw new Error(`Sincronización bloqueada: ${configProblems().join(' · ')}`); };
@@ -33,12 +35,15 @@ async function boot() {
     sheets = { upsertRow: blocked };
   } else if (config.syncMode === 'google') {
     drive = new GoogleDriveAdapter(auth, config.driveFolderId!);
+    // Archivo de originales (opcional): misma implementación, otra carpeta raíz con permisos restringidos.
+    if (config.originalsFolderId) archiveDrive = new GoogleDriveAdapter(auth, config.originalsFolderId);
     sheets = new GoogleSheetsAdapter(auth, config.spreadsheetId!, config.sheetTab);
   } else {
     // Remoto simulado en memoria (desarrollo). Respeta el estado de red real del navegador.
     const net = new MockNetwork();
     Object.defineProperty(net, 'online', { get: () => navigator.onLine, set: () => undefined });
     drive = new MockDrive(net); sheets = new MockSheets(net);
+    archiveDrive = new MockDrive(net, 'ORIGINALES_FASE2'); // respaldo restringido simulado
   }
 
   // Motor OCR: PaddleOCR por defecto; modelo ligero en teléfonos con ≤3 GB de RAM.
@@ -48,13 +53,19 @@ async function boot() {
       : config.ocrEngine === 'remote' && config.ocrRemoteUrl ? new RemoteOCRAdapter(config.ocrRemoteUrl, auth)
         : new PaddleOCRAdapter(undefined, { model: lowMem ? 'PP-OCRv6_tiny' : 'PP-OCRv5_mobile' });
 
-  const app = await CaptureApp.create({ auth, ocr, drive, sheets, autoSyncMs: 60_000 });
+  const scanner = config.scanner && config.ocrEngine !== 'mock' ? new WorkerScanner() : undefined;
+  const app = await CaptureApp.create({ dbName: config.dbName, auth, ocr, drive, sheets, scanner, archiveDrive, autoSyncMs: 60_000 });
+  if (config.instance !== 'production') {
+    document.body.classList.add('instance-preview');
+    document.body.setAttribute('data-instance', `VISTA PREVIA · ${config.instance} · datos aislados`);
+    document.title = `[${config.instance.toUpperCase()}] ${document.title}`;
+  }
   const storage = await requestPersistentStorage().catch(() => ({ persisted: false }));
   const ui = new UI(document.getElementById('app')!, app, { configProblems: configProblems(), engineName: ocr.name, storage });
   await ui.start();
   await app.start();
   // Para pruebas E2E e inspección en desarrollo (solo sin Google real).
-  if (config.syncMode !== 'google') Object.assign(window, { __cx: { app, drive, sheets } });
+  if (config.syncMode !== 'google') Object.assign(window, { __cx: { app, drive, sheets, archive: archiveDrive } });
 
   registerSW({ immediate: true, onOfflineReady() { console.info('[PWA] lista para uso sin conexión'); } });
 }

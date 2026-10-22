@@ -13,7 +13,7 @@ export type CommercialField = (typeof COMMERCIAL_FIELDS)[number];
 export const TECHNICAL_FIELDS = [
   'capture_uuid', 'record_revision', 'ocr_status', 'review_status', 'review_fields',
   'evidence_folder_id', 'evidence_folder_url', 'evidence_ids', 'evidence_files',
-  'ocr_engine', 'ocr_fax', 'ocr_text_front', 'ocr_text_back', 'device_id', 'created_at', 'updated_at', 'app_version',
+  'ocr_engine', 'ocr_fax', 'ocr_extras', 'ocr_text_front', 'ocr_text_back', 'device_id', 'created_at', 'updated_at', 'app_version',
 ] as const;
 export type TechnicalField = (typeof TECHNICAL_FIELDS)[number];
 export const SHEET_COLUMNS = [...COMMERCIAL_FIELDS, ...TECHNICAL_FIELDS] as const;
@@ -77,6 +77,34 @@ export const EVIDENCE_LABELS: Record<EvidenceKind, string> = {
   product: 'Producto', catalog: 'Catálogo', other: 'Otra evidencia',
 };
 
+/** Resultado del Smart Document Scanner sobre una foto original de tarjeta. */
+export interface EvidenceScan {
+  status: 'ok' | 'low_confidence' | 'not_found' | 'manual';
+  confidence: number;
+  /** esquinas detectadas en la foto (con EXIF aplicado): TL, TR, BR, BL */
+  quad?: { x: number; y: number }[];
+  method?: string;
+  multiple: boolean;
+  reasons: string[];
+  /** true si existe una versión recortada y enderezada (evidencia `processed`) */
+  cropped: boolean;
+  /** rotación aplicada al texto, grados en sentido horario */
+  rotation: number;
+  orientation_source: 'classifier' | 'classifier+ocr' | 'ocr' | 'none';
+  orientation_confident: boolean;
+  orientation_probs?: number[];
+  trials?: { rot: number; prior: number; score: number }[];
+  processed_id?: string;
+  source_size?: { width: number; height: number };
+  output_size?: { width: number; height: number };
+  ms?: Record<string, number>;
+  at: string;
+  /** esquinas ajustadas a mano (excepcional): el siguiente proceso las usa en lugar de la detección */
+  manual_quad?: { x: number; y: number }[];
+  /** modo de procesamiento usado (normal / reducido / mínimo) según memoria e intentos */
+  mode?: 'normal' | 'reduced' | 'minimal';
+}
+
 export interface Evidence {
   id: string; // UUID inmutable
   capture_uuid: string;
@@ -90,6 +118,19 @@ export interface Evidence {
   remote_file_id?: string;
   remote_url?: string;
   uploaded_at?: string;
+  /** original = foto del teléfono (inmutable); processed = documento recortado/enderezado derivado */
+  role?: 'original' | 'processed';
+  derived_from?: string;
+  /** procesado sustituido por un reproceso posterior (se conserva, no se sube si no se subió ya) */
+  superseded_by?: string;
+  /** carpeta remota de `remote_file_id`: siempre la principal del proveedor (versiones ≤1.1-rc usaban 'archive') */
+  remote_target?: 'main' | 'archive';
+  /** copia en el RESPALDO RESTRINGIDO de originales (independiente de la carpeta principal) */
+  archive_file_id?: string;
+  archive_url?: string;
+  archived_at?: string;
+  sha256?: string;
+  scan?: EvidenceScan;
 }
 
 export interface Capture {
@@ -104,7 +145,9 @@ export interface Capture {
   ocr_engine?: string;
   ocr_next_attempt_at?: number;
   /** datos detectados sin columna comercial propia (fax, QQ): se exportan en columnas técnicas */
-  ocr_extras?: { fax: string[]; qq: string[] };
+  ocr_extras?: { fax: string[]; qq: string[]; postal_code?: string[]; secondary_companies?: string[] };
+  /** incidencias del escáner que requieren revisión humana (bordes dudosos, varias tarjetas…) */
+  scan_issues?: string[];
   review_status: ReviewStatus;
   sync_status: SyncStatus;
   sync_error?: string;
@@ -113,7 +156,7 @@ export interface Capture {
   /** Se incrementa en cada cambio de datos. CONFIRMADO solo si synced_revision === revision. */
   revision: number;
   synced_revision: number;
-  remote?: { folder_id?: string; folder_url?: string; row_confirmed_at?: string };
+  remote?: { folder_id?: string; folder_url?: string; archive_folder_id?: string; row_confirmed_at?: string };
   device_id: string;
   user_id: string;
   created_at: string;
@@ -132,6 +175,9 @@ export interface OcrResultRecord {
   text: string;
   ms: number;
   created_at: string;
+  /** rotación (grados horarios) de la imagen leída y evidencia usada (procesada u original) */
+  rotation?: number;
+  read_from?: string;
 }
 
 export interface AuditEvent {

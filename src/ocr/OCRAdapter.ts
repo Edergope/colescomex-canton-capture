@@ -36,7 +36,7 @@ export function sortLines(lines: OcrLine[]): OcrLine[] {
       const last = r[r.length - 1];
       const hh = Math.max(h(last), h(l));
       const gap = cx(l) - right(last);
-      return Math.abs(cy(last) - cy(l)) < hh * 0.5 && Math.min(h(last), h(l)) / hh > 0.5 && gap > -hh * 0.2 && gap < hh * 2.5;
+      return Math.abs(cy(last) - cy(l)) < hh * 0.5 && Math.min(h(last), h(l)) / hh > 0.5 && gap > -hh * 0.5 && gap < hh * 2.5; // el detector puede solapar cajas contiguas
     });
     if (row) row.push(l); else rows.push([l]);
   }
