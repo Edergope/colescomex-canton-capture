@@ -72,10 +72,16 @@ Comandos: `npm run build` (incluye `tsc --noEmit`), `npm test`, `npm run test:e2
 
 ## Verificación y Despliegue Antigravity (2026-10-22)
 
-### 1. Línea base ejecutada y confirmada
-- **Vitest**: 33/33 pruebas unitarias y de integración superadas (1.11s).
-- **Playwright E2E**: 4/4 pruebas de extremo a extremo aprobadas (2.3 min) con emulación Pixel 7 y PaddleOCR en navegador.
+### 1. Línea base ejecutada y confirmada en sesión activa
+- **Vitest**: 33/33 pruebas unitarias y de integración superadas (1.03s).
+- **Playwright E2E**: 4/4 pruebas de extremo a extremo aprobadas (2.3 min) con emulación Pixel 7 y PaddleOCR en navegador:
+  - Capturas consecutivas con OCR real, fusión y sincronización: PASS.
+  - Conservación de corrección humana tras reprocesar OCR: PASS.
+  - Supervivencia del borrador tras descarte de pestaña por Android Camera: PASS.
+  - Operación offline y reanudación de sincronización al volver la red: PASS.
+- **Evaluación OCR (`npm run ocr:eval`)**: 64/64 en escaneos, 63/64 en fotos reales, CER 0.003 - 0.005 con PaddleOCR.
 - **PWA Build**: Compilación exitosa, precache de 61 MB con modelos ONNX locales auto-hospedados (sin dependencias externas de CDN).
+- **Traspaso de Arquitectura**: `CLAUDE_UX_UI_HANDOFF.md` completado y publicado en repositorio.
 
 ### 2. Infraestructura y Despliegue
 - **Proyecto GCP**: `colescomex-growth-engine` (Project # 65238029115).
