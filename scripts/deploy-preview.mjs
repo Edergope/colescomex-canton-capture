@@ -27,12 +27,21 @@ const envFile = path.join(root, '.env.preview.local');
 if (!fs.existsSync(envFile)) fail('Falta .env.preview.local (copie .env.preview.example y complete los IDs de PRUEBA).');
 const env = Object.fromEntries(fs.readFileSync(envFile, 'utf8').split('\n').filter((l) => /^\s*VITE_/.test(l)).map((l) => { const i = l.indexOf('='); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
 if ((env.VITE_INSTANCE || 'production').toLowerCase() === 'production') fail('VITE_INSTANCE debe ser "preview" en .env.preview.local.');
-const prodIds = [env.VITE_PRODUCTION_SPREADSHEET_ID, env.VITE_PRODUCTION_DRIVE_FOLDER_ID, env.VITE_PRODUCTION_ORIGINALS_FOLDER_ID].filter(Boolean);
+const prodIds = [env.VITE_PRODUCTION_SPREADSHEET_ID, env.VITE_PRODUCTION_DRIVE_FOLDER_ID, env.VITE_PRODUCTION_ORIGINALS_FOLDER_ID, env.VITE_PHASE1_SPREADSHEET_ID].filter(Boolean);
 if (prodIds.length < 2) fail('Declare VITE_PRODUCTION_SPREADSHEET_ID y VITE_PRODUCTION_DRIVE_FOLDER_ID (IDs de producción a BLOQUEAR).');
 for (const k of ['VITE_SHEETS_SPREADSHEET_ID', 'VITE_DRIVE_EVIDENCE_FOLDER_ID', 'VITE_DRIVE_ORIGINALS_FOLDER_ID']) {
   if (env.VITE_SYNC_MODE === 'google' && !env[k]) fail(`Falta ${k} (recurso de PRUEBA) en .env.preview.local.`);
   if (env[k] && prodIds.includes(env[k])) fail(`${k} apunta a un recurso de PRODUCCIÓN.`);
 }
+
+// OAuth: cliente de PRUEBA, distinto del de producción (el de producción no debe autorizar orígenes de prueba sin aprobación)
+if (env.VITE_AUTH_MODE === 'google') {
+  if (!env.VITE_GOOGLE_CLIENT_ID) (dry ? console.warn : fail)('⚠ Falta VITE_GOOGLE_CLIENT_ID (cliente OAuth Web de PRUEBA con el origen *.pages.dev).');
+  if (env.VITE_GOOGLE_CLIENT_ID && env.VITE_GOOGLE_CLIENT_ID === env.VITE_PRODUCTION_GOOGLE_CLIENT_ID && !process.argv.includes('--allow-production-oauth-client'))
+    fail('VITE_GOOGLE_CLIENT_ID es el cliente de PRODUCCIÓN. Use un cliente de prueba (o --allow-production-oauth-client con aprobación expresa).');
+}
+if (!env.VITE_PHASE1_SPREADSHEET_ID) fail('Declare VITE_PHASE1_SPREADSHEET_ID para bloquear el archivo histórico de Fase 1.');
+run('node scripts/check-private-data.mjs');
 
 const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root }).toString().trim();
 const sha = execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();

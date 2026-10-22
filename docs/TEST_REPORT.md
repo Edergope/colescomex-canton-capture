@@ -187,3 +187,28 @@ El campo se conserva tal como se leyó, queda en **`review`** con el motivo (las
 | D3/D4 | 10 capturas seguidas en perfil estándar y en bajo | Validar que la alternancia y la recuperación evitan cierres; ajustar el umbral de 4 GB |
 | S1–S8 | Flujo completo contra Drive y Sheets **de prueba** desde la vista previa aislada | Las subidas reales de la versión procesada, del respaldo y de `ocr_extras` solo se han probado con simulaciones y emulador |
 | V5 | Reproceso de `CF26F2-EDR-HDHG-0001` en producción, tras la promoción | La vista previa aislada no puede (ni debe) ver ese registro |
+
+## Verificación de integración (2026-10-22, commit `4fca683`)
+
+Ejecución independiente de la batería. Entorno: macOS arm64, Node 22.23, Chromium headless con Pixel 7 emulado, con fixtures privados.
+
+| Comando | Inicio (UTC) | Duración | Aprobadas | Fallidas | Omitidas |
+|---|---|---|---|---|---|
+| `npm run check:private` | 23:08:50 | 1 s | 1 verificación | 0 | 0 |
+| `npm test` | 23:08:51 | 11 s | 79 | 0 | 0 |
+| `npm run build` | 23:09:02 | 2 s | build OK (68 MB precache) | 0 | — |
+| `npm run test:e2e` | 23:09:04 | 148 s | 5 | 0 | 0 |
+| `npm run ocr:eval` | 23:11:32 | 30 s | Paddle 64/64 · 63/64 | — | — |
+| `npm run scanner:eval` | 23:12:02 | 30 s | R1 16/17; orientación 22/22 | R1 `main_products` (6/10 exactos, en revisión) | 0 |
+
+**Infraestructura de prueba:**
+- Recursos en `QA_PRIVADO/PREVIEW_QA`: `EVIDENCIAS_PRUEBA`, `ORIGINALES_PRUEBA` y la hoja `COLESCOMEX_CANTON_CAPTURE_QA` con la cabecera de 47 columnas verificada. Permisos restringidos (Eder, Héctor, egopmultimedia), sin enlaces públicos.
+- `ORIGINALES_FASE2`: Eder y Héctor como editores, sin enlace público.
+- Copia de los fixtures privados en QA_PRIVADO: SHA-256 de las dos fotos verificado.
+
+**Build de vista previa (`deploy-preview.mjs --dry-run`):** PASS.
+- Única base de datos `colescomex-canton-capture--preview`, franja y manifiesto propios.
+- Recursos de producción y Fase 1 bloqueados.
+- La app rechaza la configuración sin cliente OAuth de prueba.
+
+**Pendiente:** despliegue en Cloudflare (cuenta de COLESCOMEX), cliente OAuth de prueba, renombrar la pestaña de la hoja de prueba, D1–D4 y S1–S8 ([PREVIEW_VALIDATION.md](PREVIEW_VALIDATION.md)).
