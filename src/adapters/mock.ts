@@ -43,7 +43,8 @@ export class MockDrive implements DriveAdapter {
   uploadEvidence(folderId: string, e: EvidenceUpload) {
     return this.net.run(() => {
       if (!this.folders.has(folderId)) throw new Error(`Carpeta ${folderId} no existe`);
-      let f = [...this.files.values()].find((x) => x.appProperties.evidence_id === e.evidence_id);
+      // igual que Drive real con la búsqueda acotada: la misma evidencia puede existir en varias carpetas
+      let f = [...this.files.values()].find((x) => x.appProperties.evidence_id === e.evidence_id && x.parent === folderId);
       if (!f) {
         f = { id: `file_${++this.n}`, name: e.file_name, parent: folderId, size: e.blob.size, mime: e.mime,
           appProperties: { evidence_id: e.evidence_id, capture_uuid: e.capture_uuid, kind: e.kind } };

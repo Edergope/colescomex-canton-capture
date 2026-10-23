@@ -12,3 +12,6 @@ ocr-eval/results/*.json
 ocr-eval/scanner-fixtures/
 test-logs/
 .firebase
+
+# Artefactos de la prueba de actualización de la PWA (e2e/pwa-update.spec.ts)
+dist-update/

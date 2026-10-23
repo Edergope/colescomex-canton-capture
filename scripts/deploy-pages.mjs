@@ -26,6 +26,33 @@ const distDir = path.join(projectRoot, 'dist');
 fs.writeFileSync(path.join(distDir, '.nojekyll'), '');
 fs.copyFileSync(path.join(distDir, 'index.html'), path.join(distDir, '404.html'));
 
+// 2b. Retención de assets de la publicación anterior (una versión). Una app instalada que todavía ejecuta la
+//     versión anterior (p. ej. esperando un momento seguro para recargar, o con el OCR en curso) puede pedir
+//     chunks con hash antiguos (workers del OCR y del escáner). Si desaparecen del servidor fallarían con 404.
+//     Solo se conservan los propios de la publicación anterior (no los que ella ya retenía): el tamaño no crece.
+console.log('\n[2b] Conservando assets de la publicación anterior (compatibilidad durante la actualización)...');
+const RETAIN_DIRS = ['assets/', 'ocr-assets/'];
+const retained = [];
+try {
+  execSync('git fetch origin gh-pages', { cwd: projectRoot, stdio: 'pipe' });
+  const prevRetained = new Set((() => {
+    try { return JSON.parse(execSync('git show origin/gh-pages:retained-assets.json', { cwd: projectRoot, stdio: 'pipe' }).toString()).files ?? []; } catch { return []; }
+  })());
+  const prevFiles = execSync('git ls-tree -r --name-only origin/gh-pages', { cwd: projectRoot, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 }).toString().split('\n').filter(Boolean);
+  for (const f of prevFiles) {
+    if (!RETAIN_DIRS.some((d) => f.startsWith(d)) || prevRetained.has(f)) continue;
+    const target = path.join(distDir, f);
+    if (fs.existsSync(target)) continue;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, execSync(`git show "origin/gh-pages:${f}"`, { cwd: projectRoot, stdio: 'pipe', maxBuffer: 256 * 1024 * 1024 }));
+    retained.push(f);
+  }
+  console.log(`✓ ${retained.length} archivo(s) de la versión anterior conservados (no entran en el precaché).`);
+} catch (e) {
+  console.log(`(sin publicación anterior que conservar: ${e.message.split('\n')[0]})`);
+}
+fs.writeFileSync(path.join(distDir, 'retained-assets.json'), `${JSON.stringify({ files: retained }, null, 2)}\n`);
+
 // 3. Verificar repositorio remoto
 const repoName = 'colescomex-canton-capture';
 console.log(`\n[3/4] Verificando repositorio remoto en GitHub (${repoName})...`);
@@ -47,7 +74,8 @@ if (fs.existsSync(tmpGitDir)) {
 run('git init -b gh-pages', distDir);
 run(`git remote add origin https://github.com/Edergope/${repoName}.git`, distDir);
 run('git add -A', distDir);
-run('git commit -m "deploy: PWA production build v1.2.0 with Smart Document Scanner and self-hosted OCR models"', distDir);
+const { version, build } = JSON.parse(fs.readFileSync(path.join(distDir, 'version.json'), 'utf8'));
+run(`git commit -m "deploy: PWA v${version} (compilación ${build})"`, distDir);
 run('git push -f origin gh-pages', distDir);
 
 // Configurar GitHub Pages en el repositorio para que sirva desde gh-pages
