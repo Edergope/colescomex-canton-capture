@@ -122,5 +122,17 @@ describe('GoogleSheetsAdapter', () => {
     // Fila 3 (duplicada) limpiada
     expect(g.grid[2]).toEqual([]);
   });
+  it('preserva notas humanas existentes en la hoja si la fila entrante no tiene nuevo contenido', async () => {
+    const g = fakeGoogle();
+    g.grid = [
+      ['external_ref', 'company_name', 'capture_uuid', 'notes', 'follow_up'],
+      ['R1', 'Empresa Original', 'u-notes', 'Nota importante escrita por operador en Sheets', 'Contactar el viernes'],
+    ];
+    const sheets = new GoogleSheetsAdapter(await authed(), 'SHEET', 'CAPTURA_FASE2', g.fetch);
+    // Simular un re-sync donde notes y follow_up vienen vacíos desde el móvil
+    const res = await sheets.upsertRow({ external_ref: 'R1', company_name: 'Empresa Actualizada', capture_uuid: 'u-notes', notes: '', follow_up: '' });
+    expect(res).toEqual({ rowNumber: 2, action: 'updated' });
+    expect(g.grid[1]).toEqual(['R1', 'Empresa Actualizada', 'u-notes', 'Nota importante escrita por operador en Sheets', 'Contactar el viernes']);
+  });
   it('letras de columna', () => { expect([1, 26, 27, 45, 52, 53].map(col)).toEqual(['A', 'Z', 'AA', 'AS', 'AZ', 'BA']); });
 });

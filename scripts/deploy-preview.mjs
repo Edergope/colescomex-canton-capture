@@ -1,15 +1,16 @@
 // Despliegue de VISTA PREVIA verdaderamente aislada (NO producción).
 //
 // Aislamiento en dos capas:
-//  1. ORIGEN distinto (Cloudflare Pages: https://<proyecto>.pages.dev). IndexedDB, Cache Storage y el service
-//     worker son por origen: la vista previa no puede ver ni modificar las capturas de la app de producción
-//     (https://edergope.github.io). Por eso se rechaza cualquier destino *.github.io.
+//  1. ORIGEN distinto (Firebase Hosting: https://<proyecto>.web.app o Cloudflare Pages).
+//     IndexedDB, Cache Storage y el service worker son por origen: la vista previa no puede ver
+//     ni modificar las capturas de la app de producción (https://edergope.github.io).
+//     Por eso se rechaza cualquier destino *.github.io.
 //  2. INSTANCIA `preview` en el código: base de datos local con otro nombre, franja "VISTA PREVIA" y bloqueo de
 //     sincronización contra la hoja / carpetas de producción (VITE_PRODUCTION_* en .env.preview.local).
 //
-// No hace commit, push ni merge de ninguna rama y no toca GitHub Pages.
-// Requisitos: .env.preview.local (ver .env.preview.example), `npx wrangler login` con la cuenta de Cloudflare de COLESCOMEX.
-// Uso: node scripts/deploy-preview.mjs [--project=colescomex-capture-preview] [--dry-run]
+// No hace commit, push ni merge de ninguna rama y no toca GitHub Pages ni producción.
+// Requisitos: .env.preview.local (ver .env.preview.example).
+// Uso: node scripts/deploy-preview.mjs [--project=colescomex-capture-preview] [--target=firebase|cloudflare] [--dry-run]
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (k, d) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
 const project = arg('project', 'colescomex-capture-preview');
+const target = arg('target', fs.existsSync(path.join(root, 'firebase.json')) ? 'firebase' : 'cloudflare');
 const dry = process.argv.includes('--dry-run');
 const run = (cmd) => { console.log(`> ${cmd}`); return execSync(cmd, { cwd: root, stdio: 'inherit' }); };
 const fail = (m) => { console.error(`✗ ${m}`); process.exit(1); };
@@ -36,7 +38,7 @@ for (const k of ['VITE_SHEETS_SPREADSHEET_ID', 'VITE_DRIVE_EVIDENCE_FOLDER_ID', 
 
 // OAuth: cliente de PRUEBA, distinto del de producción (el de producción no debe autorizar orígenes de prueba sin aprobación)
 if (env.VITE_AUTH_MODE === 'google') {
-  if (!env.VITE_GOOGLE_CLIENT_ID) (dry ? console.warn : fail)('⚠ Falta VITE_GOOGLE_CLIENT_ID (cliente OAuth Web de PRUEBA con el origen *.pages.dev).');
+  if (!env.VITE_GOOGLE_CLIENT_ID) (dry ? console.warn : fail)(`⚠ Falta VITE_GOOGLE_CLIENT_ID (cliente OAuth Web de PRUEBA con el origen ${target === 'firebase' ? 'https://' + project + '.web.app' : '*.pages.dev'}).`);
   if (env.VITE_GOOGLE_CLIENT_ID && env.VITE_GOOGLE_CLIENT_ID === env.VITE_PRODUCTION_GOOGLE_CLIENT_ID && !process.argv.includes('--allow-production-oauth-client'))
     fail('VITE_GOOGLE_CLIENT_ID es el cliente de PRODUCCIÓN. Use un cliente de prueba (o --allow-production-oauth-client con aprobación expresa).');
 }
@@ -45,7 +47,8 @@ run('node scripts/check-private-data.mjs');
 
 const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root }).toString().trim();
 const sha = execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
-console.log(`Vista previa aislada de ${branch}@${sha} → https://${project}.pages.dev`);
+const previewUrl = target === 'firebase' ? `https://${project}.web.app` : `https://${project}.pages.dev`;
+console.log(`Vista previa aislada (${target}) de ${branch}@${sha} → ${previewUrl}`);
 
 run('npm test');
 run('npx tsc --noEmit && npx vite build --mode preview');
@@ -57,6 +60,13 @@ if (!js.includes('colescomex-canton-capture--') || !new RegExp(`["'\`]${env.VITE
 for (const k of ['VITE_SHEETS_SPREADSHEET_ID', 'VITE_DRIVE_EVIDENCE_FOLDER_ID']) if (env[k] && !js.includes(env[k])) fail(`El build no contiene ${k} de prueba.`);
 fs.writeFileSync(path.join(dist, 'PREVIEW.txt'), `Vista previa aislada ${branch}@${sha} ${new Date().toISOString()}\n`);
 if (dry) { console.log('✓ --dry-run: build verificado, no se publicó.'); process.exit(0); }
-run(`npx wrangler@4 pages deploy dist --project-name ${project} --branch preview --commit-message "preview ${branch}@${sha}" --commit-dirty=true`);
-console.log(`\n✓ Vista previa: https://preview.${project}.pages.dev (y https://${project}.pages.dev si es el primer despliegue)`);
-console.log('  Añada ese origen al cliente OAuth de PRUEBA (no al de producción) — ver ANTIGRAVITY_HANDOFF.md V3.');
+if (target === 'firebase') {
+  run(`npx --yes firebase-tools deploy --only hosting --project colescomex-growth-engine`);
+  console.log(`\n✓ Vista previa publicada en Firebase Hosting: ${previewUrl}`);
+  console.log(`  (Origen alternativo: https://${project}.firebaseapp.com)`);
+  console.log('  Asegúrese de que estos orígenes estén autorizados en el cliente OAuth de PRUEBA.');
+} else {
+  run(`npx wrangler@4 pages deploy dist --project-name ${project} --branch preview --commit-message "preview ${branch}@${sha}" --commit-dirty=true`);
+  console.log(`\n✓ Vista previa: https://preview.${project}.pages.dev (y https://${project}.pages.dev si es el primer despliegue)`);
+  console.log('  Añada ese origen al cliente OAuth de PRUEBA (no al de producción) — ver ANTIGRAVITY_HANDOFF.md V3.');
+}

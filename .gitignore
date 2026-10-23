@@ -11,3 +11,4 @@ ocr-eval/results/*.json
 .env.test
 ocr-eval/scanner-fixtures/
 test-logs/
+.firebase

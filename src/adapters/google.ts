@@ -99,13 +99,36 @@ export class GoogleSheetsAdapter implements SheetsAdapter {
     });
 
     // RAW: evita que Sheets interprete "+86..." como fórmula o número. Los null preservan columnas existentes.
-    const values = header.map((h) => (h in row ? row[h] : null));
-
-    // Si ya existe al menos una fila previa: actualizar la primera (canónica) y limpiar duplicados si los hubiera.
+    // Si ya existe al menos una fila previa: actualizar la primera (canónica) preservando anotaciones humanas.
     if (matches.length > 0) {
       const canonicalRow = matches[0];
+      // Lectura no destructiva de la fila canónica existente para no borrar notas ni ediciones previas
+      const existingRes = (await (await this.api(`${this.base()}/values/${this.range(`A${canonicalRow}:${col(header.length)}${canonicalRow}`)}`)).json()) as { values?: string[][] };
+      const existing = existingRes.values?.[0] ?? [];
+
+      // Si existieran duplicados por concurrencia, recopilar sus anotaciones antes de limpiarlos
+      for (let d = 1; d < matches.length; d++) {
+        try {
+          const dupRes = (await (await this.api(`${this.base()}/values/${this.range(`A${matches[d]}:${col(header.length)}${matches[d]}`)}`)).json()) as { values?: string[][] };
+          const dupVals = dupRes.values?.[0] ?? [];
+          dupVals.forEach((dv, i) => {
+            if (dv && (!existing[i] || existing[i] === '')) existing[i] = dv;
+          });
+        } catch { /* continuar con la limpieza segura */ }
+      }
+
+      // Preservar datos existentes cuando el valor a enviar esté vacío pero la hoja contenga anotaciones (p. ej. notas humanas)
+      const mergedValues = header.map((h, i) => {
+        const val = row[h];
+        const prev = existing[i];
+        if ((val === undefined || val === '') && prev !== undefined && prev !== '') {
+          return prev;
+        }
+        return val ?? null;
+      });
+
       await this.api(`${this.base()}/values/${this.range(`A${canonicalRow}:${col(header.length)}${canonicalRow}`)}?valueInputOption=RAW`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [values] }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: [mergedValues] }),
       });
       for (let d = 1; d < matches.length; d++) {
         const dupRow = matches[d];
@@ -115,6 +138,8 @@ export class GoogleSheetsAdapter implements SheetsAdapter {
       }
       return { rowNumber: canonicalRow, action: 'updated' as const };
     }
+
+    const values = header.map((h) => (h in row ? row[h] : null));
 
     // Inserción atómica mediante append
     const res = await this.api(`${this.base()}/values/${this.range('A1')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
