@@ -1,6 +1,9 @@
 // Armazón de la interfaz: enrutado, navegación, refresco en vivo y contexto compartido por las pantallas.
 // La UI solo habla con CaptureApp (y lee el repositorio local); nunca con Google directamente.
-import { mount, releaseUrls, toast, LazyThumbs } from './dom';
+import { h, mount, releaseUrls, toast, LazyThumbs, pickerOpen, confirmSheet } from './dom';
+import { icon } from './icons';
+import type { UpdateManager } from '../pwa/update';
+import { updateSafety } from '../pwa/safety';
 import { bottomNav, type NavKey } from './components';
 import { applyTheme, watchSystemTheme } from './theme';
 import type { CaptureApp } from '../app/service';
@@ -24,7 +27,7 @@ export type Route =
   | { name: 'review'; uuid?: string }
   | { name: 'sync' } | { name: 'settings' };
 
-export interface UiInfo { configProblems: string[]; engineName: string; storage?: { persisted: boolean } }
+export interface UiInfo { configProblems: string[]; engineName: string; storage?: { persisted: boolean }; updater?: UpdateManager }
 
 export interface Ctx {
   app: CaptureApp;
@@ -40,6 +43,8 @@ export interface Ctx {
   /** la pantalla actual tiene cambios sin guardar: se pausa el refresco en vivo */
   setDirty(d: boolean): void;
   nav(current: NavKey | null): HTMLElement;
+  /** aplica una actualización lista si es seguro (o explica por qué todavía no) */
+  applyUpdateNow(): Promise<void>;
 }
 
 const NAV_ROUTE: Record<NavKey, Route> = { home: { name: 'home' }, list: { name: 'list' }, capture: { name: 'capture' }, review: { name: 'review' }, settings: { name: 'settings' } };
@@ -53,13 +58,52 @@ export class UI implements Ctx {
   private capture?: CaptureFlow;
   private reviewCount = 0;
   private renderSeq = 0;
+  /** entradas de historial creadas por la app en esta sesión (back() nunca sale de la app) */
+  private depth = 0;
 
   constructor(private root: HTMLElement, readonly app: CaptureApp, readonly info: UiInfo) {
     applyTheme(); watchSystemTheme();
     app.repo.onChange(() => this.scheduleRefresh());
     window.addEventListener('online', () => this.scheduleRefresh());
     window.addEventListener('offline', () => this.scheduleRefresh());
-    window.addEventListener('popstate', () => { this.leave(); this.route = (history.state as Route) ?? { name: 'home' }; void this.render(); });
+    window.addEventListener('popstate', () => { this.depth = Math.max(0, this.depth - 1); this.leave(); this.route = (history.state as Route) ?? { name: 'home' }; void this.render(); });
+    const up = info.updater;
+    if (up) {
+      up.setSafetyProbe((mode) => this.updateSafety(mode));
+      up.onChange(() => this.drawUpdateBar());
+    }
+  }
+
+  /**
+   * ¿Se puede recargar la app ahora para aplicar una actualización sin perder nada?
+   * Automático: nunca con la cámara abierta. Manual: la captura en curso se conserva (borrador persistido),
+   * salvo en pleno disparo o guardado.
+   */
+  updateSafety(mode: 'auto' | 'manual'): { safe: boolean; reason?: string } {
+    return updateSafety({
+      mode, route: this.route.name, captureBusy: !!this.capture?.isBusy(), pickerOpen: pickerOpen(), dirty: this.dirty,
+      overlayOpen: !!document.querySelector('.scrim, .ce-overlay'), ocrBusy: this.app.ocr.busy, syncBusy: this.app.sync.busy,
+    });
+  }
+
+  /** Aviso persistente de actualización (no bloquea; se aplica sola en un momento seguro). */
+  private drawUpdateBar() {
+    const s = this.info.updater?.state;
+    let bar = document.getElementById('update-bar');
+    if (!s || (s.phase !== 'ready' && s.phase !== 'applying')) { bar?.remove(); return; }
+    if (!bar) { bar = h('div', { id: 'update-bar', class: 'update-bar', role: 'status', 'aria-live': 'polite' }); document.body.appendChild(bar); }
+    const applying = s.phase === 'applying';
+    bar.replaceChildren(icon(applying ? 'loader' : 'sparkles', applying ? 'sm spin' : 'sm'),
+      h('span', { class: 'grow' }, applying ? 'Actualizando a la nueva versión…' : s.blockedBy ? `Nueva versión lista. Se aplicará sola en cuanto sea seguro (ahora ${s.blockedBy}).` : 'Nueva versión lista.'),
+      applying ? '' : h('button', { class: 'btn sm', id: 'btn-update-now', onClick: () => void this.applyUpdateNow() }, 'Actualizar ahora'));
+  }
+
+  async applyUpdateNow() {
+    const up = this.info.updater; if (!up) return;
+    const p = this.updateSafety('manual');
+    if (!p.safe) { toast(`Todavía no: ${p.reason}. Se actualizará en cuanto sea seguro.`, 5000); up.maybeApply('auto'); return; }
+    if (this.route.name === 'capture' && !(await confirmSheet('Actualizar ahora', 'La app se recargará. Las fotos de la captura en curso ya están guardadas en este teléfono y se recuperarán.', 'Actualizar'))) return;
+    up.maybeApply('manual');
   }
 
   async start() {
@@ -72,11 +116,17 @@ export class UI implements Ctx {
     history.replaceState(this.route, '');
     await this.render();
     if (this.user && draft?.evidences.length) toast('Se recuperó una captura sin guardar');
+    const out = this.info.updater?.state.outcome;
+    if (out) toast(out.ok ? `Actualizada a la versión ${out.to}. Sus capturas siguen en este teléfono.` : 'La actualización no llegó a aplicarse; se reintentará automáticamente.', 7000);
+    this.drawUpdateBar();
   }
 
-  go(r: Route) { this.leave(); this.route = r; history.pushState(r, ''); void this.render(); window.scrollTo(0, 0); }
-  replace(r: Route) { this.leave(); this.route = r; history.replaceState(r, ''); void this.render(); }
-  back() { if (history.state && history.length > 1) history.back(); else this.replace({ name: 'home' }); }
+  go(r: Route) { this.leave(); this.route = r; this.depth++; history.pushState(r, ''); void this.render(); window.scrollTo(0, 0); this.afterNavigate(); }
+  replace(r: Route) { this.leave(); this.route = r; history.replaceState(r, ''); void this.render(); this.afterNavigate(); }
+  /** Al salir de la cámara o volver a Inicio, una actualización pendiente puede aplicarse sin interrumpir nada. */
+  private afterNavigate() { if (this.info.updater?.state.phase === 'ready') setTimeout(() => this.info.updater?.maybeApply('auto'), 300); }
+  /** Volver solo dentro de la app: si la pantalla se abrió al arrancar (p. ej. borrador recuperado), se va a Inicio. */
+  back() { if (this.depth > 0) history.back(); else this.replace({ name: 'home' }); }
   refresh() { void this.render(true); }
   setUser(u: UserProfile | null) { this.user = u; }
   setDirty(d: boolean) { this.dirty = d; }

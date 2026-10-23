@@ -139,6 +139,26 @@ export class CaptureRepo {
     await tx.done;
   }
 
+  /**
+   * Reparación NO destructiva de un enlace principal que en realidad apunta al respaldo restringido
+   * (defecto de búsqueda sin carpeta en v1.1/v1.2-rc, o `remote_target: 'archive'` de versiones antiguas).
+   * Ningún archivo de Drive se borra: el enlace pasa a figurar como respaldo y la carpeta principal se vuelve
+   * a subir en la próxima sincronización.
+   */
+  async moveMainLinkToArchive(id: string): Promise<boolean> {
+    const tx = this.db.transaction('evidences', 'readwrite');
+    const e = await tx.store.get(id);
+    if (!e?.remote_file_id) { await tx.done; return false; }
+    const misfiled = e.remote_target === 'archive' || (!!e.archive_file_id && e.archive_file_id === e.remote_file_id);
+    if (!misfiled) { await tx.done; return false; }
+    const fixed: Evidence = { ...e,
+      archive_file_id: e.archive_file_id ?? e.remote_file_id, archive_url: e.archive_url ?? e.remote_url, archived_at: e.archived_at ?? e.uploaded_at,
+      remote_file_id: undefined, remote_url: undefined, uploaded_at: undefined, remote_target: undefined };
+    await tx.store.put(fixed);
+    await tx.done;
+    return true;
+  }
+
   async saveOcrResult(r: OcrResultRecord): Promise<void> { await this.db.put('ocr_results', r); }
 
   /**

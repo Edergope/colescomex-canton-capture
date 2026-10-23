@@ -49,6 +49,9 @@ export class OcrQueue {
     this.enqueue(uuid);
   }
 
+  /** true mientras un documento se está escaneando o leyendo (una recarga ahora se tomaría por un cierre por memoria). */
+  get busy(): boolean { return this.running; }
+
   /** Resuelve cuando la cola queda vacía (útil en pruebas). */
   idle(): Promise<void> {
     if (!this.running && this.queue.length === 0 && this.timers.size === 0) return Promise.resolve();

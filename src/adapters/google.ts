@@ -49,7 +49,9 @@ export class GoogleDriveAdapter implements DriveAdapter {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: c.external_ref, mimeType: 'application/vnd.google-apps.folder', parents: [this.evidenceRootId], appProperties: { capture_uuid: c.capture_uuid, app: 'cx-canton-capture' } }),
     });
-    const f = (await res.json()) as { id: string; webViewLink?: string };
+    const f = (await res.json()) as { id?: string; webViewLink?: string };
+    // Una respuesta sin identificador nunca se trata como éxito (evita filas de Sheets con enlaces vacíos)
+    if (!f.id) throw new Error('Drive no devolvió el identificador de la carpeta creada');
     return { folderId: f.id, url: f.webViewLink ?? `https://drive.google.com/drive/folders/${f.id}` };
   }
 
@@ -66,7 +68,8 @@ export class GoogleDriveAdapter implements DriveAdapter {
     const res = await this.api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink&supportsAllDrives=true', {
       method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
     });
-    const f = (await res.json()) as { id: string; webViewLink?: string };
+    const f = (await res.json()) as { id?: string; webViewLink?: string };
+    if (!f.id) throw new Error(`Drive no devolvió el identificador del archivo ${e.file_name}`);
     return { fileId: f.id, url: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view` };
   }
 }

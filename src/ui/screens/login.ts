@@ -4,6 +4,7 @@ import { icon } from '../icons';
 import { notice } from '../components';
 import type { Ctx } from '../views';
 import { NotAuthorizedError } from '../../adapters/contracts';
+import { APP_BUILD, APP_VERSION } from '../../config/version';
 
 export function loginScreen(ctx: Ctx) {
   const users = ctx.app.auth.allowedUsers();
@@ -33,6 +34,7 @@ export function loginScreen(ctx: Ctx) {
           icon(google ? 'key' : 'chevron'));
         return b;
       }),
+      h('span', { class: 'net xs', id: 'login-version' }, `Versión ${APP_VERSION} · compilación ${APP_BUILD}`),
       h('span', { class: 'net', role: 'status' }, icon(navigator.onLine ? 'wifi' : 'wifi-off', 'sm'), navigator.onLine ? 'Conectado' : 'Sin conexión: solo puede entrar si ya inició sesión en este teléfono')));
 }
 

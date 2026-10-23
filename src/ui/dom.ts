@@ -81,8 +81,14 @@ export function confirmSheet(title: string, body: string, ok: string, cancel = '
 }
 
 /** Abre la cámara del sistema o la galería y devuelve los archivos elegidos. */
+let pickerSince = 0;
+/** true mientras la cámara del sistema o la galería están abiertas (recargar ahora perdería la foto). */
+export function pickerOpen(): boolean { return pickerSince > 0 && Date.now() - pickerSince < 5 * 60_000; }
+
 export function pickFiles(opts: { camera?: boolean; accept?: string; multiple?: boolean } = {}): Promise<File[]> {
-  return new Promise((resolve) => {
+  pickerSince = Date.now();
+  return new Promise<File[]>((res) => {
+    const resolve = (f: File[]) => { pickerSince = 0; res(f); };
     const input = h('input', { type: 'file', accept: opts.accept ?? 'image/*', class: 'hidden' }) as HTMLInputElement;
     if (opts.camera) input.setAttribute('capture', 'environment');
     if (opts.multiple) input.multiple = true;

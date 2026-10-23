@@ -68,6 +68,36 @@ export class SyncEngine {
   private online() { return this.opts.isOnline?.() ?? (typeof navigator === 'undefined' || navigator.onLine !== false); }
   private now() { return this.opts.now?.() ?? Date.now(); }
 
+  /** true mientras hay un envío a Google en curso. */
+  get busy(): boolean { return !!this.inFlight; }
+
+  /**
+   * Repara (sin borrar nada en Drive) evidencias cuyo enlace «principal» apunta al respaldo restringido y deja la
+   * captura pendiente para que la siguiente sincronización suba el archivo a la carpeta del proveedor y corrija la fila.
+   */
+  /** Recuento (solo lectura) de evidencias con el enlace principal apuntando al respaldo, por captura. */
+  async findMisfiledEvidence(): Promise<{ captures: number; evidences: number; refs: string[] }> {
+    const refs: string[] = []; let evidences = 0;
+    for (const c of await this.repo.list()) {
+      const n = (await this.repo.evidences(c.uuid)).filter((e) => !!e.remote_file_id && (e.remote_target === 'archive' || (!!e.archive_file_id && e.archive_file_id === e.remote_file_id))).length;
+      if (n) { refs.push(c.external_ref); evidences += n; }
+    }
+    return { captures: refs.length, evidences, refs };
+  }
+
+  async repairMisfiledEvidence(): Promise<number> {
+    let fixed = 0;
+    for (const c of await this.repo.list()) {
+      const ids: string[] = [];
+      for (const e of await this.repo.evidences(c.uuid)) if (await this.repo.moveMainLinkToArchive(e.id)) ids.push(e.id);
+      if (!ids.length) continue;
+      fixed += ids.length;
+      await this.repo.update(c.uuid, (x) => { if (x.sync_status === 'CONFIRMADO') x.sync_status = 'PENDIENTE'; x.sync_next_attempt_at = undefined; },
+        { audit: { actor: 'system', type: 'DRIVE_LINK_REPAIRED', detail: { evidences: ids } } });
+    }
+    return fixed;
+  }
+
   needsSync(c: Capture): boolean { return c.synced_revision < c.revision || c.sync_status !== 'CONFIRMADO'; }
 
   /** Una sola ejecución a la vez; si se pide otra durante la actual, se encadena al terminar. */

@@ -86,6 +86,9 @@ export class CaptureFlow {
 
   onDataChanged() { void this.updateQueue(); }
 
+  /** En pleno disparo o guardado: una recarga ahora podría perder la foto que se está tomando. */
+  isBusy(): boolean { return this.shooting || this.saving; }
+
   // ───────────── cámara ─────────────
   private async startCamera() {
     if (!LiveCamera.supported()) { this.camError = 'Este navegador no permite la cámara dentro de la app.'; this.draw(); return; }
