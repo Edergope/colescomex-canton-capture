@@ -54,7 +54,7 @@ function extract(ref: string, dir: string) {
 }
 function buildBranch(id: string, extraEnv: Record<string, string> = {}) {
   const dir = path.join(OUT, id);
-  execSync(`npx vite build --mode test --outDir "${dir}" --emptyOutDir`, { stdio: 'pipe', env: { ...process.env, VITE_BUILD_ID: id, ...extraEnv } });
+  execSync(`npx vite build --mode test --outDir "${dir}" --emptyOutDir`, { stdio: 'pipe', env: { ...process.env, VITE_INSTANCE: 'production', VITE_AUTH_MODE: 'mock', VITE_SYNC_MODE: 'mock', VITE_BUILD_ID: id, ...extraEnv } });
   fs.copyFileSync(path.join(dir, 'index.html'), path.join(dir, '404.html'));
   return dir;
 }
