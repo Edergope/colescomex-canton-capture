@@ -16,6 +16,7 @@
     "ocr:eval": "node ocr-eval/run-eval.mjs",
     "verify:google": "node scripts/verify-google-live.mjs",
     "deploy": "node scripts/deploy-pages.mjs",
+    "deploy:dry-run": "node scripts/deploy-pages.mjs --dry-run",
     "scanner:fixtures": "node --import tsx ocr-eval/make-scanner-fixtures.ts",
     "scanner:eval": "node ocr-eval/run-scanner-eval.mjs",
     "scanner:before-after": "node --import tsx scripts/before-after.ts",

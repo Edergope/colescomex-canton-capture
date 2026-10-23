@@ -75,6 +75,16 @@ export class SyncEngine {
    * Repara (sin borrar nada en Drive) evidencias cuyo enlace «principal» apunta al respaldo restringido y deja la
    * captura pendiente para que la siguiente sincronización suba el archivo a la carpeta del proveedor y corrija la fila.
    */
+  /** Recuento (solo lectura) de evidencias con el enlace principal apuntando al respaldo, por captura. */
+  async findMisfiledEvidence(): Promise<{ captures: number; evidences: number; refs: string[] }> {
+    const refs: string[] = []; let evidences = 0;
+    for (const c of await this.repo.list()) {
+      const n = (await this.repo.evidences(c.uuid)).filter((e) => !!e.remote_file_id && (e.remote_target === 'archive' || (!!e.archive_file_id && e.archive_file_id === e.remote_file_id))).length;
+      if (n) { refs.push(c.external_ref); evidences += n; }
+    }
+    return { captures: refs.length, evidences, refs };
+  }
+
   async repairMisfiledEvidence(): Promise<number> {
     let fixed = 0;
     for (const c of await this.repo.list()) {

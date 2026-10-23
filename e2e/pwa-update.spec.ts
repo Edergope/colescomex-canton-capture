@@ -9,6 +9,7 @@ import { execSync } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { HERMETIC_ENV, assertHermetic } from './support/hermetic-env';
 
 const expect = baseExpect.configure({ timeout: 90_000 });
 const OUT = path.resolve('dist-update');
@@ -54,7 +55,9 @@ function extract(ref: string, dir: string) {
 }
 function buildBranch(id: string, extraEnv: Record<string, string> = {}) {
   const dir = path.join(OUT, id);
-  execSync(`npx vite build --mode test --outDir "${dir}" --emptyOutDir`, { stdio: 'pipe', env: { ...process.env, VITE_INSTANCE: 'production', VITE_AUTH_MODE: 'mock', VITE_SYNC_MODE: 'mock', VITE_BUILD_ID: id, ...extraEnv } });
+  execSync(`npx vite build --mode test --outDir "${dir}" --emptyOutDir`, { stdio: 'pipe', env: { ...process.env, ...HERMETIC_ENV, VITE_BUILD_ID: id, ...extraEnv } });
+  const h = assertHermetic(dir);
+  if (h.leaked || !h.mockAuth || !h.mockSync) throw new Error(`build de prueba NO hermético: ${JSON.stringify(h)}`);
   fs.copyFileSync(path.join(dir, 'index.html'), path.join(dir, '404.html'));
   return dir;
 }

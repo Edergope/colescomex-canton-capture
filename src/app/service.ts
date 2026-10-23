@@ -19,6 +19,11 @@ export interface AppDeps {
   /** Control de memoria / recuperación (Android). `false` lo desactiva (pruebas). */
   resources?: GovernorOptions | false;
   ocrOptions?: OcrQueueOptions; syncOptions?: SyncOptions; autoSyncMs?: number; syncDebounceMs?: number;
+  /**
+   * Reparar automáticamente al arrancar los enlaces de Drive mal archivados (defecto v1.1/v1.2-rc).
+   * En producción es `false`: solo se detectan y la reparación requiere confirmación del operador.
+   */
+  autoRepairLinks?: boolean;
 }
 
 export class CaptureApp {
@@ -36,15 +41,16 @@ export class CaptureApp {
   }
 
   /** Arranque: retoma OCR pendiente y programa la sincronización automática. */
-  async start(): Promise<{ resumedOcr: number; repairedLinks: number }> {
+  async start(): Promise<{ resumedOcr: number; repairedLinks: number; misfiledLinks: number }> {
     const resumedOcr = await this.ocr.start();
-    const repairedLinks = await this.sync.repairMisfiledEvidence().catch(() => 0);
+    const repairedLinks = this.deps.autoRepairLinks === false ? 0 : await this.sync.repairMisfiledEvidence().catch(() => 0);
+    const misfiledLinks = (await this.sync.findMisfiledEvidence().catch(() => ({ evidences: 0 }))).evidences;
     if (this.deps.autoSyncMs) {
       this.timers.push(setInterval(() => void this.syncNow().catch(() => undefined), this.deps.autoSyncMs));
       if (typeof window !== 'undefined') window.addEventListener('online', () => this.kickSync());
     }
     this.kickSync();
-    return { resumedOcr, repairedLinks };
+    return { resumedOcr, repairedLinks, misfiledLinks };
   }
 
   stop() { this.ocr.stop(); for (const t of this.timers) clearInterval(t as never); if (this.kickTimer) clearTimeout(this.kickTimer); }
@@ -96,6 +102,15 @@ export class CaptureApp {
   }
 
   syncNow(force = false): Promise<SyncReport> { return this.sync.syncAll({ force }); }
+
+  /** Enlaces de Drive por revisar (solo lectura) y reparación explícita confirmada por el operador. */
+  findMisfiledLinks() { return this.sync.findMisfiledEvidence(); }
+  async repairMisfiledLinks(): Promise<number> {
+    const u = await this.user();
+    const n = await this.sync.repairMisfiledEvidence();
+    if (n) { await this.repo.addAudit({ capture_uuid: '-', actor: u.id, type: 'DRIVE_LINK_REPAIR_APPROVED', detail: { evidences: n } }); this.kickSync(); }
+    return n;
+  }
 
   kickSync() {
     if (this.kickTimer) clearTimeout(this.kickTimer);

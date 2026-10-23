@@ -88,6 +88,10 @@ export class UpdateManager {
       if (!w) return;
       this.set({ phase: 'downloading', error: undefined });
       w.addEventListener('statechange', () => {
+        if (w.state === 'installed' && reg.waiting && navigator.serviceWorker.controller) {
+          this.markReady();
+          return;
+        }
         // instalación interrumpida (red caída, almacenamiento lleno): el navegador la reintentará en la próxima comprobación
         if (w.state === 'redundant' && this.state.phase === 'downloading') {
           this.set({ phase: 'error', error: 'La descarga de la nueva versión se interrumpió. Se reintentará automáticamente.' });

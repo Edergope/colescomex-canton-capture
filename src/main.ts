@@ -61,7 +61,8 @@ async function boot() {
         : new PaddleOCRAdapter(undefined, { model: lowMem ? 'PP-OCRv6_tiny' : 'PP-OCRv5_mobile' });
 
   const scanner = config.scanner && config.ocrEngine !== 'mock' ? new WorkerScanner() : undefined;
-  const app = await CaptureApp.create({ dbName: config.dbName, auth, ocr, drive, sheets, scanner, archiveDrive, autoSyncMs: 60_000 });
+  // En producción los enlaces de Drive mal archivados solo se detectan: repararlos requiere confirmación (Ajustes).
+  const app = await CaptureApp.create({ dbName: config.dbName, auth, ocr, drive, sheets, scanner, archiveDrive, autoSyncMs: 60_000, autoRepairLinks: config.instance !== 'production' });
   if (config.instance !== 'production') {
     document.body.classList.add('instance-preview');
     document.body.setAttribute('data-instance', `VISTA PREVIA · ${config.instance} · datos aislados`);

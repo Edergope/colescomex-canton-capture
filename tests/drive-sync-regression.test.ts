@@ -194,3 +194,36 @@ describe('defecto anterior (búsqueda sin carpeta) y reparación no destructiva'
     expect(filesIn(g, c.remote!.folder_id).map((f) => f.appProperties.kind).sort()).toEqual(['card_front', 'stand']);
   });
 });
+
+describe('producción: reparaciones de enlaces solo con aprobación del operador', () => {
+  it('al arrancar solo se detecta (no se modifica nada); la reparación requiere la acción explícita', async () => {
+    const { CaptureApp } = await import('../src/app/service');
+    const { MockOCRAdapter } = await import('../src/ocr/mock');
+    const g = fakeGoogle();
+    const auth = new MockAuth([USER]); await auth.signIn('EDR');
+    const app = await CaptureApp.create({
+      dbName: `drive-prod-${++n}-${Math.random()}`, auth, ocr: new MockOCRAdapter({ delayMs: 1 }), resources: false, syncDebounceMs: 60_000,
+      drive: new GoogleDriveAdapter(auth, 'ROOT_MAIN', g.fetch), archiveDrive: new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', g.fetch),
+      sheets: new GoogleSheetsAdapter(auth, 'SHEET', 'CAPTURA_FASE2', g.fetch), autoRepairLinks: false,
+    });
+    try {
+      const uuid = await capture(app.repo, 'not_cropped');
+      const front = (await app.repo.evidences(uuid)).find((e) => e.kind === 'card_front')!;
+      await app.repo.updateEvidence(front.id, { remote_file_id: 'SAME', remote_url: 'https://drive/SAME', archive_file_id: 'SAME', archive_url: 'https://drive/SAME' });
+      await app.repo.update(uuid, (x) => { x.sync_status = 'CONFIRMADO'; x.synced_revision = x.revision; });
+
+      const r = await app.start();
+      expect(r).toMatchObject({ repairedLinks: 0, misfiledLinks: 1 });
+      const untouched = (await app.repo.evidences(uuid)).find((e) => e.id === front.id)!;
+      expect(untouched).toMatchObject({ remote_file_id: 'SAME', archive_file_id: 'SAME' });
+      expect((await app.repo.get(uuid))!.sync_status).toBe('CONFIRMADO');
+      expect((await app.findMisfiledLinks()).refs).toEqual([(await app.repo.get(uuid))!.external_ref]);
+
+      expect(await app.repairMisfiledLinks()).toBe(1); // acción explícita (botón + confirmación en Ajustes)
+      const fixed = (await app.repo.evidences(uuid)).find((e) => e.id === front.id)!;
+      expect(fixed).toMatchObject({ remote_file_id: undefined, archive_file_id: 'SAME' });
+      expect((await app.repo.get(uuid))!.sync_status).toBe('PENDIENTE');
+      expect((await app.findMisfiledLinks()).evidences).toBe(0);
+    } finally { app.stop(); }
+  });
+});

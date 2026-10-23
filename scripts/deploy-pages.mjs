@@ -15,7 +15,9 @@ function run(cmd, cwd = projectRoot) {
   return execSync(cmd, { cwd, stdio: 'inherit' });
 }
 
-console.log('=== DESPLIEGUE A GITHUB PAGES (COLESCOMEX CANTON FAIR CAPTURE) ===');
+// --dry-run: hace TODO (build de producción, retención, controles, commit local en dist/) salvo publicar.
+const DRY = process.argv.includes('--dry-run');
+console.log(`=== DESPLIEGUE A GITHUB PAGES (COLESCOMEX CANTON FAIR CAPTURE)${DRY ? ' — SIMULACRO, NO SE PUBLICA' : ''} ===`);
 
 // 1. Compilar aplicación con variables de producción
 console.log('\n[1/4] Compilando aplicación de producción (PWA y assets locales)...');
@@ -39,6 +41,18 @@ try {
 } catch (e) {
   console.log(`(sin publicación anterior que conservar: ${String(e.message).split('\n')[0]})`);
   fs.writeFileSync(path.join(distDir, 'retained-assets.json'), '{ "files": [] }\n');
+}
+
+// 2c. Controles obligatorios del artefacto publicable (SW con activación automática, precaché, modelos OCR,
+//     ausencia de secretos y de fixtures privados). Si fallan, NO se publica.
+console.log('\n[2c] Controlando el artefacto publicable (check:dist)...');
+run('node scripts/check-dist.mjs dist');
+
+if (DRY) {
+  const v = JSON.parse(fs.readFileSync(path.join(distDir, 'version.json'), 'utf8'));
+  const retainedFiles = JSON.parse(fs.readFileSync(path.join(distDir, 'retained-assets.json'), 'utf8')).files;
+  console.log(`\n✓ SIMULACRO COMPLETO: v${v.version} (compilación ${v.build}) lista en dist/ · ${retainedFiles.length} asset(s) retenidos. Nada publicado.`);
+  process.exit(0);
 }
 
 // 3. Verificar repositorio remoto

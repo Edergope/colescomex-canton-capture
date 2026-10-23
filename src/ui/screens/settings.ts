@@ -58,6 +58,7 @@ export async function settingsScreen(ctx: Ctx, all: Capture[]) {
         g ? segmented<'standard' | 'low'>('Perfil de memoria', [['standard', 'Estándar'], ['low', 'Bajo consumo']], g.profile,
           async (v) => { await g.setProfile(v, 'elegido por el usuario'); toast(v === 'low' ? 'Modo de bajo consumo activado' : 'Modo estándar activado'); ctx.refresh(); }) : null)),
       FEATURES.documentTypes ? sectionCard('set-doctypes', 'file', 'Tipos de documento', h('p', { class: 'small muted' }, 'Vista previa interna. Solo «Tarjeta comercial» está disponible.')) : null,
+      await driveLinksSection(ctx),
       updateSection(ctx),
       h('button', { class: 'btn danger block', id: 'btn-logout', onClick: async () => {
         const ok = await confirmSheet('Cerrar sesión', pending
@@ -110,4 +111,23 @@ function updateSection(ctx: Ctx) {
   draw();
   const off = up?.onChange(() => { if (!body.isConnected) { off?.(); return; } draw(); });
   return sectionCard('set-about', 'info', 'Versión y actualizaciones', body);
+}
+
+/**
+ * Enlaces de Drive mal archivados por versiones anteriores (el enlace principal apuntaba al respaldo restringido).
+ * En producción no se reparan solos: se muestran y el operador decide. La reparación no borra nada en Drive.
+ */
+async function driveLinksSection(ctx: Ctx) {
+  const found = await ctx.app.findMisfiledLinks().catch(() => ({ captures: 0, evidences: 0, refs: [] as string[] }));
+  if (!found.evidences) return null;
+  return sectionCard('set-drive-links', 'alert', 'Enlaces de Drive por revisar', h('div', { class: 'stack' },
+    h('p', { class: 'small' }, `${found.evidences} foto(s) de ${found.captures} captura(s) figuran en la carpeta del proveedor pero en realidad solo están en el respaldo restringido (defecto de una versión anterior).`),
+    h('p', { class: 'xs muted' }, `Afectadas: ${found.refs.join(', ')}. La reparación no borra ningún archivo: vuelve a subir la foto a la carpeta del proveedor y corrige la fila de Sheets.`),
+    h('button', { class: 'btn sm primary', id: 'btn-repair-links', onClick: async () => {
+      const ok = await confirmSheet('Reparar enlaces de Drive', `Se volverán a subir ${found.evidences} foto(s) a la carpeta de su proveedor y se actualizará su fila. No se borra nada.`, 'Reparar');
+      if (!ok) return;
+      const n = await ctx.app.repairMisfiledLinks();
+      toast(`${n} enlace(s) en reparación · se completará al sincronizar`);
+      ctx.refresh();
+    } }, 'Revisar y reparar')));
 }
