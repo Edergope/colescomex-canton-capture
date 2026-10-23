@@ -54,7 +54,7 @@ export class GoogleDriveAdapter implements DriveAdapter {
   }
 
   async uploadEvidence(folderId: string, e: EvidenceUpload) {
-    const found = await this.findOne(`trashed = false and appProperties has { key='evidence_id' and value='${q(e.evidence_id)}' }`);
+    const found = await this.findOne(`'${q(folderId)}' in parents and trashed = false and appProperties has { key='evidence_id' and value='${q(e.evidence_id)}' }`);
     if (found) return { fileId: found.id, url: found.webViewLink ?? `https://drive.google.com/file/d/${found.id}/view` };
     const meta = { name: e.file_name, parents: [folderId], mimeType: e.mime,
       appProperties: { evidence_id: e.evidence_id, capture_uuid: e.capture_uuid, kind: e.kind, external_ref: e.external_ref, ...(e.sha256 ? { sha256: e.sha256 } : {}) } };

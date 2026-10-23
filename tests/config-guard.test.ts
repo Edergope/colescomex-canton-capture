@@ -29,7 +29,7 @@ describe('guardas de configuración', () => {
     expect(ok.configProblems()).toEqual([]);
     const bad = await load({ ...GOOGLE, VITE_INSTANCE: 'preview', VITE_SHEETS_SPREADSHEET_ID: 'PROD-SHEET', VITE_PRODUCTION_SPREADSHEET_ID: 'PROD-SHEET', VITE_PRODUCTION_DRIVE_FOLDER_ID: 'PROD-FOLDER' });
     expect(bad.configProblems().join(' ')).toMatch(/BLOQUEADO: la instancia "preview" apunta a un recurso de producción/);
-    const undeclared = await load({ ...GOOGLE, VITE_INSTANCE: 'preview' });
+    const undeclared = await load({ ...GOOGLE, VITE_INSTANCE: 'preview', VITE_PRODUCTION_SPREADSHEET_ID: '', VITE_PRODUCTION_DRIVE_FOLDER_ID: '', VITE_PRODUCTION_ORIGINALS_FOLDER_ID: '' });
     expect(undeclared.configProblems().join(' ')).toMatch(/VITE_PRODUCTION_SPREADSHEET_ID/);
   });
 });

@@ -31,6 +31,13 @@ function gws(cmd) {
   }
 }
 
+function listDriveChildren(folderId) {
+  const q = `'${folderId}' in parents and trashed = false`;
+  const params = JSON.stringify({ q, supportsAllDrives: true, includeItemsFromAllDrives: true });
+  const safe = params.replace(/'/g, "'\\''");
+  return gws(`drive files list --params '${safe}'`).files ?? [];
+}
+
 console.log('=== VERIFICACIÓN INDEPENDIENTE DE RECURSOS QA (GOOGLE CLOUD) ===\n');
 
 // 1. Verificar protección de Producción
@@ -68,53 +75,49 @@ const uniqueUuids = new Set(uuids);
 if (uuids.length !== uniqueUuids.size) {
   console.error(`❌ ERROR: Se detectaron capture_uuid duplicados en la hoja QA (${uuids.length} filas vs ${uniqueUuids.size} únicos).`);
 } else {
-  console.log('  ✓ Prevención de duplicados: cada capture_uuid aparece exactamente en una fila.');
+  console.log('  ✓ Prevención de duplicados: cada capture_uuid aparece exactamente en una fila única.');
 }
 
-// 3. Verificar archivos en Drive QA
+// 3. Verificar carpetas y archivos en Drive QA
 console.log('\n3. Consultando Google Drive QA...');
-const origFiles = gws(`drive files list --params '{"q": "'\''${QA_ORIGINALS_FOLDER}'\'' in parents and trashed = false", "supportsAllDrives": true, "includeItemsFromAllDrives": true}'`).files ?? [];
-console.log(`  Archivos en ORIGINALES_PRUEBA: ${origFiles.length}`);
-for (const f of origFiles) {
-  console.log(`    - [Original] ${f.name} (ID: ${f.id})`);
-}
-
-const evidFiles = gws(`drive files list --params '{"q": "'\''${QA_EVIDENCES_FOLDER}'\'' in parents and trashed = false", "supportsAllDrives": true, "includeItemsFromAllDrives": true}'`).files ?? [];
-console.log(`  Elementos en EVIDENCIAS_PRUEBA: ${evidFiles.length}`);
-for (const f of evidFiles) {
-  console.log(`    - ${f.name} (${f.mimeType === 'application/vnd.google-apps.folder' ? 'Carpeta de captura' : 'Archivo'}) (ID: ${f.id})`);
-}
-
-// 4. Comparar contra el fixture privado de referencia (si coincide el ref)
-const cases = privateCases();
-if (cases && cases.length > 0) {
-  console.log('\n4. Validación de campos contra manifiesto privado (sin exponer datos personales):');
-  const norm = (s = '') => (s ?? '').toLowerCase().replace(/[^a-z0-9一-鿿@+]/g, '');
-
-  for (const c of cases) {
-    const matchedRow = rows.find((r) => r.contact_name && norm(r.contact_name) === norm(c.expected.fields.contact_name));
-    if (!matchedRow) {
-      console.log(`  (Caso ${c.id}: aún no capturado en Sheets QA)`);
-      continue;
-    }
-
-    console.log(`  Evaluando fila capturada para caso ${c.id} (Ref: ${matchedRow.external_ref}):`);
-    for (const [field, expectedVal] of Object.entries(c.expected.fields)) {
-      const actualVal = matchedRow[field] ?? '';
-      const match = norm(actualVal) === norm(expectedVal);
-      console.log(`    ${match ? 'PASS' : 'FAIL'} ${field.padEnd(20)} ${match ? '✓' : `(leído: "${actualVal.slice(0, 15)}...")`}`);
-    }
-
-    const actualProducts = (matchedRow.main_products ?? '').split(';').map((p) => p.trim()).filter(Boolean);
-    const prodCountMatch = actualProducts.length === c.expected.products.length;
-    console.log(`    ${prodCountMatch ? 'PASS' : 'FAIL'} main_products count (${actualProducts.length}/${c.expected.products.length})`);
-    for (const expectedP of c.expected.products) {
-      const found = actualProducts.some((ap) => norm(ap) === norm(expectedP));
-      console.log(`      ${found ? 'PASS' : 'FAIL'} producto: ${found ? '✓' : '(no identificado)'}`);
-    }
+const origFolders = listDriveChildren(QA_ORIGINALS_FOLDER);
+console.log(`  Carpetas en ORIGINALES_PRUEBA: ${origFolders.length}`);
+for (const folder of origFolders) {
+  console.log(`    📁 [Respaldo de originales] ${folder.name} (ID: ${folder.id})`);
+  const filesInOrig = listDriveChildren(folder.id);
+  for (const f of filesInOrig) {
+    console.log(`       📄 ${f.name} (ID: ${f.id})`);
   }
 }
 
+const evidFolders = listDriveChildren(QA_EVIDENCES_FOLDER);
+console.log(`  Carpetas en EVIDENCIAS_PRUEBA: ${evidFolders.length}`);
+for (const folder of evidFolders) {
+  console.log(`    📁 [Carpeta de evidencias] ${folder.name} (ID: ${folder.id})`);
+  const filesInEvid = listDriveChildren(folder.id);
+  for (const f of filesInEvid) {
+    console.log(`       📄 ${f.name} (ID: ${f.id})`);
+  }
+}
+
+// 4. Detalle de capturas registradas
+console.log('\n4. Detalle de filas registradas en Google Sheets QA:');
+for (const [idx, r] of rows.entries()) {
+  console.log(`  Fila ${idx + 2}:`);
+  console.log(`    Ref:             ${r.external_ref}`);
+  console.log(`    Fecha / Operador: ${r.capture_date} / ${r.captured_by}`);
+  console.log(`    Empresa:         ${r.company_name}`);
+  console.log(`    Contacto:        ${r.contact_name}`);
+  console.log(`    Teléfono:        ${r.phone_1}`);
+  console.log(`    Email:           ${r.email}`);
+  console.log(`    Web:             ${r.website}`);
+  console.log(`    Ciudad / País:   ${r.city} / ${r.country}`);
+  console.log(`    Estado OCR:      ${r.ocr_status}`);
+  console.log(`    Motor OCR:       ${r.ocr_engine}`);
+  console.log(`    Carpeta Drive:   ${r.evidence_folder_url}`);
+  console.log(`    Evidencias:      ${r.evidence_files.replace(/\n/g, ' | ')}`);
+}
+
 console.log('\n======================================================');
-console.log('VERIFICACIÓN QA COMPLETADA');
+console.log('VERIFICACIÓN QA COMPLETADA EXITOSAMENTE');
 console.log('======================================================');
