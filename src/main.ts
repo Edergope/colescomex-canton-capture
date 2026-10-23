@@ -67,6 +67,15 @@ async function boot() {
   // Para pruebas E2E e inspección en desarrollo (solo sin Google real).
   if (config.syncMode !== 'google') Object.assign(window, { __cx: { app, drive, sheets, archive: archiveDrive } });
 
+  if ('serviceWorker' in navigator) {
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+  }
+
   const updateSW = registerSW({
     immediate: true,
     onNeedRefresh() {

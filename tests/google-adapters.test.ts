@@ -77,6 +77,23 @@ describe('GoogleDriveAdapter', () => {
     expect(g.files.filter((f) => f.mimeType !== 'application/vnd.google-apps.folder')).toHaveLength(1);
     expect(g.files[1]).toMatchObject({ name: 'x_01_card_front.jpg', parents: [f1.folderId], appProperties: { evidence_id: 'e-1', capture_uuid: 'u-1' } });
   });
+  it('respeta el ámbito de carpeta padre y no confunde archivo del respaldo con carpeta principal', async () => {
+    const g = fakeGoogle();
+    const mainDrive = new GoogleDriveAdapter(await authed(), 'ROOT_MAIN', g.fetch);
+    const archiveDrive = new GoogleDriveAdapter(await authed(), 'ROOT_ARCHIVE', g.fetch);
+    const mainFolder = await mainDrive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
+    const archiveFolder = await archiveDrive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
+    expect(mainFolder.folderId).not.toBe(archiveFolder.folderId);
+
+    const up = { evidence_id: 'e-1', capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001', kind: 'card_front', file_name: 'x_01_card_front.jpg', mime: 'image/jpeg', blob: new Blob(['jpeg']) };
+    // 1. Primero se respalda en la carpeta de archivo
+    const archUp = await archiveDrive.uploadEvidence(archiveFolder.folderId, up);
+    // 2. Luego se sube a la carpeta principal (no debe devolver el archivo del archivo)
+    const mainUp = await mainDrive.uploadEvidence(mainFolder.folderId, up);
+    expect(mainUp.fileId).not.toBe(archUp.fileId);
+    expect(g.files.find((f) => f.id === mainUp.fileId)!.parents).toEqual([mainFolder.folderId]);
+    expect(g.files.find((f) => f.id === archUp.fileId)!.parents).toEqual([archiveFolder.folderId]);
+  });
   it('clasifica errores: 401 → reautenticar, 503 → transitorio', async () => {
     const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
     g.failWith(401);

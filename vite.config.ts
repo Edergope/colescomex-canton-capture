@@ -57,6 +57,8 @@ export default defineConfig(({ mode }) => {
         ],
       },
       workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
         // Todo lo indispensable (incluidos modelos OCR y WASM) se precachea en la instalación.
         globPatterns: ['**/*.{js,mjs,css,html,png,svg,ico,webmanifest,wasm,tar,onnx}'],
         // Excluidos: Tesseract (motor alternativo, no por defecto) y el WASM JSEP/WebGPU de ORT que el
