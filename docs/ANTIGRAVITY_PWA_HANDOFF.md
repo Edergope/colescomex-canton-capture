@@ -25,11 +25,11 @@ Integre la rama completa. Archivos clave:
 
 ## 2. Conflicto con sus cambios locales
 
-Su `main` local tiene el commit **`15fe3b3`**, no publicado. Lo comprobé con `git merge-tree`, sin tocar su checkout:
+Su `main` local tiene el commit **`15fe3b3`**, no publicado. Lo comprobé con `git merge-tree` sobre `e2b01b6`, sin tocar su checkout:
 
 | Archivo | Resultado al fusionar | Qué hacer |
 |---|---|---|
-| `vite.config.ts` | ✅ Se fusiona solo: las líneas `skipWaiting: true` / `clientsClaim: true` son idénticas | Nada |
+| `vite.config.ts` | ❌ **Conflicto** en las líneas `skipWaiting`/`clientsClaim`. En la rama son `env.VITE_SW_NO_AUTOACTIVATE !== '1'`: siguen activas siempre salvo en la prueba de resiliencia | Quedarse **con la versión de esta rama** |
 | `tests/google-adapters.test.ts` | ✅ Se fusiona solo; su prueba nueva se conserva | Nada |
 | `src/main.ts` | ❌ **Conflicto** | Quedarse **con la versión de esta rama**: elimine el bloque `controllerchange → window.location.reload()` y el `registerSW` antiguo. El `UpdateManager` ya cubre esa función sin recargar en momentos inseguros |
 
@@ -41,11 +41,11 @@ git switch main
 git merge --no-ff origin/fix/claude-pwa-update-audit
 ```
 
-Si `src/main.ts` queda en conflicto, tome la versión de la rama:
+Si `src/main.ts` y `vite.config.ts` quedan en conflicto, tome la versión de la rama en ambos:
 
 ```bash
-git checkout --theirs src/main.ts
-git add src/main.ts
+git checkout --theirs src/main.ts vite.config.ts
+git add src/main.ts vite.config.ts
 git commit
 ```
 
