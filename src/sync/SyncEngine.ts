@@ -68,6 +68,26 @@ export class SyncEngine {
   private online() { return this.opts.isOnline?.() ?? (typeof navigator === 'undefined' || navigator.onLine !== false); }
   private now() { return this.opts.now?.() ?? Date.now(); }
 
+  /** true mientras hay un envío a Google en curso. */
+  get busy(): boolean { return !!this.inFlight; }
+
+  /**
+   * Repara (sin borrar nada en Drive) evidencias cuyo enlace «principal» apunta al respaldo restringido y deja la
+   * captura pendiente para que la siguiente sincronización suba el archivo a la carpeta del proveedor y corrija la fila.
+   */
+  async repairMisfiledEvidence(): Promise<number> {
+    let fixed = 0;
+    for (const c of await this.repo.list()) {
+      const ids: string[] = [];
+      for (const e of await this.repo.evidences(c.uuid)) if (await this.repo.moveMainLinkToArchive(e.id)) ids.push(e.id);
+      if (!ids.length) continue;
+      fixed += ids.length;
+      await this.repo.update(c.uuid, (x) => { if (x.sync_status === 'CONFIRMADO') x.sync_status = 'PENDIENTE'; x.sync_next_attempt_at = undefined; },
+        { audit: { actor: 'system', type: 'DRIVE_LINK_REPAIRED', detail: { evidences: ids } } });
+    }
+    return fixed;
+  }
+
   needsSync(c: Capture): boolean { return c.synced_revision < c.revision || c.sync_status !== 'CONFIRMADO'; }
 
   /** Una sola ejecución a la vez; si se pide otra durante la actual, se encadena al terminar. */

@@ -36,14 +36,15 @@ export class CaptureApp {
   }
 
   /** Arranque: retoma OCR pendiente y programa la sincronización automática. */
-  async start(): Promise<{ resumedOcr: number }> {
+  async start(): Promise<{ resumedOcr: number; repairedLinks: number }> {
     const resumedOcr = await this.ocr.start();
+    const repairedLinks = await this.sync.repairMisfiledEvidence().catch(() => 0);
     if (this.deps.autoSyncMs) {
       this.timers.push(setInterval(() => void this.syncNow().catch(() => undefined), this.deps.autoSyncMs));
       if (typeof window !== 'undefined') window.addEventListener('online', () => this.kickSync());
     }
     this.kickSync();
-    return { resumedOcr };
+    return { resumedOcr, repairedLinks };
   }
 
   stop() { this.ocr.stop(); for (const t of this.timers) clearInterval(t as never); if (this.kickTimer) clearTimeout(this.kickTimer); }

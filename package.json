@@ -1,6 +1,6 @@
 {
   "name": "colescomex-canton-capture",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "COLESCOMEX — Canton Fair Capture (Fase 2, China 2026). PWA offline-first de captura de proveedores.",
@@ -19,7 +19,8 @@
     "scanner:fixtures": "node --import tsx ocr-eval/make-scanner-fixtures.ts",
     "scanner:eval": "node ocr-eval/run-scanner-eval.mjs",
     "scanner:before-after": "node --import tsx scripts/before-after.ts",
-    "check:private": "node scripts/check-private-data.mjs"
+    "check:private": "node scripts/check-private-data.mjs",
+    "check:dist": "node scripts/check-dist.mjs"
   },
   "dependencies": {
     "idb": "^8.0.4"

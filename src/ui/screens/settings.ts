@@ -4,7 +4,8 @@ import { icon } from '../icons';
 import { appBar, kv, sectionCard, segmented } from '../components';
 import { getThemePref, setThemePref, type ThemePref } from '../theme';
 import { storagePressure } from '../../pipeline/resources';
-import { APP_VERSION } from '../../config/version';
+import { APP_BUILD, APP_BUILT_AT, APP_VERSION } from '../../config/version';
+import { PHASE_LABEL } from '../../pwa/update';
 import { FEATURES } from '../features';
 import type { Capture } from '../../domain/schema';
 import type { Ctx } from '../views';
@@ -57,23 +58,7 @@ export async function settingsScreen(ctx: Ctx, all: Capture[]) {
         g ? segmented<'standard' | 'low'>('Perfil de memoria', [['standard', 'Estándar'], ['low', 'Bajo consumo']], g.profile,
           async (v) => { await g.setProfile(v, 'elegido por el usuario'); toast(v === 'low' ? 'Modo de bajo consumo activado' : 'Modo estándar activado'); ctx.refresh(); }) : null)),
       FEATURES.documentTypes ? sectionCard('set-doctypes', 'file', 'Tipos de documento', h('p', { class: 'small muted' }, 'Vista previa interna. Solo «Tarjeta comercial» está disponible.')) : null,
-      sectionCard('set-about', 'info', 'Acerca de', kv([
-        ['Versión', APP_VERSION], ['Proyecto', 'COLESCOMEX · Feria de Cantón · Fase 2'],
-      ]), h('button', {
-        class: 'btn sm',
-        type: 'button',
-        id: 'btn-check-update',
-        onClick: async () => {
-          toast('Buscando actualizaciones...');
-          const reg = await navigator.serviceWorker?.getRegistration();
-          if (reg) {
-            await reg.update().catch(() => undefined);
-            toast('Búsqueda completada');
-          } else {
-            toast('Modo de desarrollo');
-          }
-        },
-      }, 'Buscar actualización')),
+      updateSection(ctx),
       h('button', { class: 'btn danger block', id: 'btn-logout', onClick: async () => {
         const ok = await confirmSheet('Cerrar sesión', pending
           ? `Hay ${pending} captura(s) sin confirmar en Google. NO se borrarán: seguirán en este teléfono y se enviarán cuando vuelva a iniciar sesión.`
@@ -83,4 +68,46 @@ export async function settingsScreen(ctx: Ctx, all: Capture[]) {
         ctx.setUser(null); ctx.replace({ name: 'login' });
       } }, icon('logout'), 'Cerrar sesión')),
     ctx.nav('settings'));
+}
+
+/** Versión instalada, estado de actualización y diagnóstico verificable (sin datos personales). */
+function updateSection(ctx: Ctx) {
+  const up = ctx.info.updater;
+  const body = h('div', { class: 'stack' });
+  const when = (iso: string) => (iso ? new Date(iso).toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' }) : undefined);
+  const draw = () => {
+    const st = up?.state;
+    const server = st?.server;
+    body.replaceChildren(
+      kv([
+        ['Versión instalada', h('span', { id: 'app-version', 'data-build': APP_BUILD }, `${APP_VERSION} · compilación ${APP_BUILD}`)],
+        ['Compilada', when(APP_BUILT_AT)],
+        ['Publicada en el servidor', server ? `${server.version} · compilación ${server.build}` : undefined],
+        ['Estado', st ? h('span', { id: 'update-phase', 'data-phase': st.phase }, PHASE_LABEL[st.phase], st.blockedBy ? ` (espera: ${st.blockedBy})` : '') : 'Sin servicio de actualización'],
+        ['Última comprobación', st?.lastCheck ? new Date(st.lastCheck).toLocaleTimeString('es', { timeStyle: 'short' }) : undefined],
+        ['Dirección', `${location.host}${location.pathname.replace(/index\.html$/, '')}`],
+        ['Proyecto', 'COLESCOMEX · Feria de Cantón · Fase 2'],
+      ]),
+      st?.error ? h('p', { class: 'small', style: 'color:var(--err)' }, st.error) : '',
+      h('div', { class: 'row' },
+        h('button', { class: 'btn sm', type: 'button', id: 'btn-check-update', disabled: !up, onClick: async () => {
+          toast('Buscando actualizaciones…');
+          const r = await up!.check(true);
+          toast(r.phase === 'ready' ? 'Hay una versión nueva lista.' : r.phase === 'downloading' ? 'Descargando la versión nueva…' : r.phase === 'offline' ? 'Sin conexión: no se pudo comprobar.' : r.phase === 'error' ? (r.error ?? 'Error') : 'Ya tiene la última versión.');
+        } }, 'Buscar actualización'),
+        st?.phase === 'ready' ? h('button', { class: 'btn sm primary', type: 'button', id: 'btn-apply-update', onClick: () => void ctx.applyUpdateNow() }, 'Actualizar ahora') : null,
+        h('button', { class: 'btn sm ghost', type: 'button', id: 'btn-copy-diag', onClick: async () => {
+          const all = await ctx.app.repo.list();
+          const d = await (up?.diagnostics({ captures: all.length, pendingSync: all.filter((c) => c.sync_status !== 'CONFIRMADO').length }) ?? Promise.resolve({ app: { version: APP_VERSION, build: APP_BUILD } }));
+          const text = JSON.stringify(d, null, 2);
+          pre.textContent = text; det.open = true;
+          try { await navigator.clipboard.writeText(text); toast('Diagnóstico copiado (sin datos personales)'); } catch { toast('Diagnóstico mostrado abajo'); }
+        } }, 'Copiar diagnóstico')),
+      det);
+  };
+  const pre = h('pre', { class: 'mono xs', id: 'diag-text', style: 'white-space:pre-wrap;margin:0' });
+  const det = h('details', null, h('summary', { class: 'small strong' }, 'Diagnóstico técnico'), pre);
+  draw();
+  const off = up?.onChange(() => { if (!body.isConnected) { off?.(); return; } draw(); });
+  return sectionCard('set-about', 'info', 'Versión y actualizaciones', body);
 }

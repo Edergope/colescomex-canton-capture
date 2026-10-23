@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { resolve, join, normalize } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import type { Plugin } from 'vite';
 import { privateDir } from './scripts/private-dir.mjs';
 
@@ -22,12 +23,32 @@ function privateFixtures(): Plugin {
   };
 }
 
+/** Identificador de compilación verificable: VITE_BUILD_ID o el commit actual (+ fecha). */
+function buildInfo(mode: string) {
+  const env = loadEnv(mode, process.cwd());
+  let commit = 'local';
+  try { commit = execSync('git rev-parse --short=8 HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* sin git */ }
+  const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version: string };
+  return { version: pkg.version, build: env.VITE_BUILD_ID || commit, builtAt: new Date().toISOString() };
+}
+
+/** Publica `version.json` (fuera del precaché: siempre refleja lo que hay en el servidor). */
+function versionFile(info: ReturnType<typeof buildInfo>): Plugin {
+  return {
+    name: 'cx-version-file', apply: 'build',
+    generateBundle() { this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify(info, null, 2)}\n` }); },
+  };
+}
+
 // Sin COOP/COEP a propósito: Google Identity Services necesita ventanas emergentes (popup) y
 // el aislamiento de origen las rompe. El OCR corre en WASM SIMD de 1 hilo dentro de un Worker.
 export default defineConfig(({ mode }) => {
-  const instance = (loadEnv(mode, process.cwd()).VITE_INSTANCE || 'production').toLowerCase();
+  const env = { ...loadEnv(mode, process.cwd()), ...process.env };
+  const instance = (env.VITE_INSTANCE || 'production').toLowerCase();
   const preview = instance !== 'production';
+  const info = buildInfo(mode);
   return {
+  define: { __APP_BUILD__: JSON.stringify(info.build), __APP_BUILT_AT__: JSON.stringify(info.builtAt) },
   base: './',
   build: {
     target: 'es2022',
@@ -41,6 +62,7 @@ export default defineConfig(({ mode }) => {
   server: { port: 5173, strictPort: true },
   plugins: [
     privateFixtures(),
+    versionFile(info),
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: false,
@@ -57,8 +79,10 @@ export default defineConfig(({ mode }) => {
         ],
       },
       workbox: {
-        skipWaiting: true,
-        clientsClaim: true,
+        // Activación automática: imprescindible para que las apps instaladas reciban la versión nueva.
+        // (VITE_SW_NO_AUTOACTIVATE=1 solo existe para la prueba de resiliencia de e2e/pwa-update.spec.ts)
+        skipWaiting: env.VITE_SW_NO_AUTOACTIVATE !== '1',
+        clientsClaim: env.VITE_SW_NO_AUTOACTIVATE !== '1',
         // Todo lo indispensable (incluidos modelos OCR y WASM) se precachea en la instalación.
         globPatterns: ['**/*.{js,mjs,css,html,png,svg,ico,webmanifest,wasm,tar,onnx}'],
         // Excluidos: Tesseract (motor alternativo, no por defecto) y el WASM JSEP/WebGPU de ORT que el

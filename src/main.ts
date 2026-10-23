@@ -1,5 +1,6 @@
 import './ui/styles.css';
-import { registerSW } from 'virtual:pwa-register';
+import { UpdateManager } from './pwa/update';
+import { APP_BUILD, APP_VERSION } from './config/version';
 import { config, configProblems } from './config/env';
 import { CaptureApp } from './app/service';
 import { UI } from './ui/views';
@@ -14,6 +15,12 @@ import { PaddleOCRAdapter } from './ocr/paddle';
 import { TesseractOCRAdapter } from './ocr/tesseract';
 import { RemoteOCRAdapter } from './ocr/remote';
 import { WorkerScanner } from './scanner/client';
+
+// Actualizaciones: se registran ANTES de abrir datos o interfaz, para que incluso una versión que falle al
+// arrancar pueda recibir su corrección. Nunca recarga en mitad de una captura (ver src/pwa/update.ts).
+const updater = new UpdateManager();
+updater.verifyPreviousUpdate();
+updater.start();
 
 async function boot() {
   // Sesión del usuario persistida en el dispositivo (permite capturar sin conexión).
@@ -61,47 +68,31 @@ async function boot() {
     document.title = `[${config.instance.toUpperCase()}] ${document.title}`;
   }
   const storage = await requestPersistentStorage().catch(() => ({ persisted: false }));
-  const ui = new UI(document.getElementById('app')!, app, { configProblems: configProblems(), engineName: ocr.name, storage });
+  const ui = new UI(document.getElementById('app')!, app, { configProblems: configProblems(), engineName: ocr.name, storage, updater });
   await ui.start();
   await app.start();
   // Para pruebas E2E e inspección en desarrollo (solo sin Google real).
-  if (config.syncMode !== 'google') Object.assign(window, { __cx: { app, drive, sheets, archive: archiveDrive } });
-
-  if ('serviceWorker' in navigator) {
-    let refreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return;
-      refreshing = true;
-      window.location.reload();
-    });
-  }
-
-  const updateSW = registerSW({
-    immediate: true,
-    onNeedRefresh() {
-      // Activa inmediatamente la nueva versión y recarga la página de forma automática
-      void updateSW(true);
-    },
-    onOfflineReady() {
-      console.info('[PWA] lista para uso sin conexión');
-    },
-    onRegisteredSW(_swUrl, registration) {
-      if (!registration) return;
-      // Comprobar actualización al volver al primer plano en el teléfono (desbloqueo / cambio de app)
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          void registration.update().catch(() => undefined);
-        }
-      });
-      // Comprobar actualización automáticamente cada 60 segundos
-      setInterval(() => {
-        void registration.update().catch(() => undefined);
-      }, 60_000);
-    },
-  });
+  if (config.syncMode !== 'google') Object.assign(window, { __cx: { app, drive, sheets, archive: archiveDrive, updater } });
 }
 
 boot().catch((e) => {
-  document.getElementById('app')!.textContent = `Error al iniciar: ${(e as Error).message}`;
+  // Recuperación: los datos del teléfono no se tocan; se puede reintentar o buscar una versión corregida.
   console.error(e);
+  const root = document.getElementById('app')!;
+  root.replaceChildren();
+  const box = document.createElement('main');
+  box.className = 'content';
+  box.innerHTML = '<div class="notice err" role="alert"><div class="grow"><b>No se pudo iniciar la app</b><p class="cx-err"></p>'
+    + '<p>Sus capturas siguen guardadas en este teléfono: no se ha borrado nada.</p>'
+    + '<div class="actions"><button class="btn sm primary" id="btn-boot-retry">Reintentar</button>'
+    + '<button class="btn sm" id="btn-boot-update">Buscar actualización</button></div></div></div>'
+    + `<p class="xs muted">Versión ${APP_VERSION} · compilación ${APP_BUILD}</p>`;
+  box.querySelector('.cx-err')!.textContent = (e as Error).message;
+  root.appendChild(box);
+  box.querySelector('#btn-boot-retry')!.addEventListener('click', () => location.reload());
+  box.querySelector('#btn-boot-update')!.addEventListener('click', async () => {
+    const st = await updater.check(true);
+    if (st.phase === 'ready') updater.maybeApply('manual');
+    else alert(st.phase === 'current' ? 'No hay una versión más reciente publicada.' : (st.error ?? 'Sin conexión: inténtelo de nuevo con red.'));
+  });
 });

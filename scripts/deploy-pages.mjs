@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { retainPreviousAssets } from './lib/retain-assets.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +27,20 @@ const distDir = path.join(projectRoot, 'dist');
 fs.writeFileSync(path.join(distDir, '.nojekyll'), '');
 fs.copyFileSync(path.join(distDir, 'index.html'), path.join(distDir, '404.html'));
 
+// 2b. Retención de assets de la publicación anterior (una versión). Una app instalada que todavía ejecuta la
+//     versión anterior (p. ej. esperando un momento seguro para recargar, o con el OCR en curso) puede pedir
+//     chunks con hash antiguos (workers del OCR y del escáner). Si desaparecen del servidor fallarían con 404.
+//     Solo se conservan los propios de la publicación anterior (no los que ella ya retenía): el tamaño no crece.
+console.log('\n[2b] Conservando assets de la publicación anterior (compatibilidad durante la actualización)...');
+try {
+  execSync('git fetch origin gh-pages', { cwd: projectRoot, stdio: 'pipe' });
+  const { retained, skippedPreviouslyRetained } = retainPreviousAssets({ cwd: projectRoot, ref: 'origin/gh-pages', distDir });
+  console.log(`✓ ${retained.length} archivo(s) de la versión anterior conservados (fuera del precaché); ${skippedPreviouslyRetained.length} antiguos retirados.`);
+} catch (e) {
+  console.log(`(sin publicación anterior que conservar: ${String(e.message).split('\n')[0]})`);
+  fs.writeFileSync(path.join(distDir, 'retained-assets.json'), '{ "files": [] }\n');
+}
+
 // 3. Verificar repositorio remoto
 const repoName = 'colescomex-canton-capture';
 console.log(`\n[3/4] Verificando repositorio remoto en GitHub (${repoName})...`);
@@ -47,7 +62,8 @@ if (fs.existsSync(tmpGitDir)) {
 run('git init -b gh-pages', distDir);
 run(`git remote add origin https://github.com/Edergope/${repoName}.git`, distDir);
 run('git add -A', distDir);
-run('git commit -m "deploy: PWA production build v1.2.0 with Smart Document Scanner and self-hosted OCR models"', distDir);
+const { version, build } = JSON.parse(fs.readFileSync(path.join(distDir, 'version.json'), 'utf8'));
+run(`git commit -m "deploy: PWA v${version} (compilación ${build})"`, distDir);
 run('git push -f origin gh-pages', distDir);
 
 // Configurar GitHub Pages en el repositorio para que sirva desde gh-pages
