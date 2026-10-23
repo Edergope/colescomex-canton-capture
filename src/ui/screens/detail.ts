@@ -120,7 +120,6 @@ export async function detailScreen(ctx: Ctx, uuid: string) {
       editable('sec-ident', 'building', 'Identificación', IDENT, [['Empresas adicionales', x?.secondary_companies?.join(' · '), { id: 'secondary_companies' }]]),
       editable('sec-comms', 'chat', 'Comunicación', COMMS, [['QQ', x?.qq?.join(' · '), { id: 'qq' }], ['Fax', x?.fax?.join(' · '), { id: 'fax' }], ['Código postal', x?.postal_code?.join(' · '), { id: 'postal_code' }]]),
       editable('sec-products', 'box', 'Productos', PRODS),
-      x && (x.secondary_companies?.length || x.qq?.length || x.fax?.length || x.postal_code?.length) ? h('div', { id: 'ocr-extras', class: 'sr-only' }, 'Datos adicionales detectados') : null,
 
       sectionCard('sec-evidence', 'image', 'Evidencias', evidenceBlock(ctx, c, evs)),
       sectionCard('sec-trace', 'history', 'Trazabilidad', await traceBlock(ctx, c))),

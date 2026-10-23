@@ -24,7 +24,8 @@ export async function listScreen(ctx: Ctx, all: Capture[], route: Extract<Route,
   let io: IntersectionObserver | undefined;
   const sentinel = h('div', { class: 'sentinel', 'aria-hidden': 'true' });
 
-  const persist = () => history.replaceState({ name: 'list', filter, q, op } satisfies Route, '');
+  // la ruta en memoria también se actualiza: un refresco en vivo conserva búsqueda y filtros
+  const persist = () => { Object.assign(route, { filter, q, op }); history.replaceState({ name: 'list', filter, q, op } satisfies Route, ''); };
   const more = () => {
     const next = rows.slice(shown, shown + PAGE);
     for (const c of next) listEl.appendChild(supplierCard(ctx, c));

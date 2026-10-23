@@ -29,9 +29,16 @@ export function loginScreen(ctx: Ctx) {
       ...users.map((u) => {
         const b: HTMLButtonElement = h('button', { class: 'account', 'data-user': u.id, onClick: () => signIn(u.id, b), 'aria-label': `Continuar como ${u.name}` },
           h('span', { class: 'avatar', 'aria-hidden': 'true' }, u.name.slice(0, 1)),
-          h('span', null, h('span', { class: 'strong', style: 'display:block' }, `Soy ${u.name}`), h('span', { class: 'small', style: 'color:#d6deea' }, u.email ?? `Operador ${u.id}`)),
+          h('span', null, h('span', { class: 'strong', style: 'display:block' }, `Soy ${u.name}`), h('span', { class: 'small', style: 'color:#d6deea' }, u.email ? maskEmail(u.email) : `Operador ${u.id}`)),
           icon(google ? 'key' : 'chevron'));
         return b;
       }),
       h('span', { class: 'net', role: 'status' }, icon(navigator.onLine ? 'wifi' : 'wifi-off', 'sm'), navigator.onLine ? 'Conectado' : 'Sin conexión: solo puede entrar si ya inició sesión en este teléfono')));
+}
+
+/** El correo se muestra parcialmente: basta para elegir la cuenta y no expone la dirección completa en pantalla. */
+export function maskEmail(e: string): string {
+  const [user, domain] = e.split('@');
+  if (!domain) return e;
+  return `${user.slice(0, 2)}${'•'.repeat(Math.max(2, Math.min(6, user.length - 2)))}@${domain}`;
 }

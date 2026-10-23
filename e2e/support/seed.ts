@@ -3,7 +3,7 @@
 // contrato existente (`repo.createCapture` + `repo.update`), sin tocar la lógica de sincronización.
 import type { Page } from '@playwright/test';
 
-export type SeedKind = 'confirmed' | 'review' | 'processing' | 'ocr_error' | 'offline' | 'no_company' | 'pending' | 'permission';
+export type SeedKind = 'confirmed' | 'review' | 'processing' | 'ocr_error' | 'offline' | 'no_company' | 'pending' | 'permission' | 'auth';
 export const SEED_CYCLE: SeedKind[] = ['confirmed', 'review', 'processing', 'pending', 'ocr_error', 'offline', 'no_company', 'permission'];
 
 /** Ejecutable dentro de la página (también se puede pegar en la consola de desarrollo). */
@@ -64,6 +64,7 @@ export async function seedInPage({ n, kinds }: { n: number; kinds: SeedKind[] })
       const SYNC: Record<SeedKind, [string, string?]> = {
         confirmed: ['CONFIRMADO'], review: ['PENDIENTE'], processing: ['LOCAL'], pending: ['PENDIENTE'], no_company: ['PENDIENTE'],
         ocr_error: ['ERROR', 'Red: Failed to fetch'], offline: ['ERROR', 'Sin conexión'], permission: ['ERROR', 'Drive HTTP 403: insufficient permissions'],
+        auth: ['ERROR', 'AuthRequiredError: Inicia sesión de nuevo con Google'],
       };
       const [st, err] = SYNC[kind];
       x.sync_status = st; x.sync_error = err;
@@ -90,4 +91,25 @@ export async function seedInPage({ n, kinds }: { n: number; kinds: SeedKind[] })
 export async function seed(page: Page, n: number, kinds: SeedKind[] = SEED_CYCLE): Promise<string[]> {
   await page.waitForFunction(() => !!(window as unknown as { __cx?: unknown }).__cx);
   return page.evaluate(seedInPage, { n, kinds });
+}
+
+/** Foto JPEG de una tarjeta ficticia (para la galería en pruebas). */
+export async function fictionalCardJpeg(page: Page, label = 'Nimbus Demo Valves Co.'): Promise<{ name: string; mimeType: string; buffer: Buffer }> {
+  const b64 = await page.evaluate(async (name) => {
+    const c = document.createElement('canvas'); c.width = 1600; c.height = 1100;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#4a5260'; g.fillRect(0, 0, 1600, 1100);
+    g.save(); g.translate(800, 550); g.rotate(-0.07);
+    g.fillStyle = '#fffdf7'; g.fillRect(-560, -330, 1120, 660);
+    g.fillStyle = '#0f766e'; g.fillRect(-560, -330, 24, 660);
+    g.fillStyle = '#111'; g.font = 'bold 54px sans-serif'; g.fillText(name, -490, -200);
+    g.font = '38px sans-serif'; g.fillText('Ada Ejemplo · Export Manager', -490, -120);
+    g.fillText('Tel: +86 555 0100 777', -490, 0); g.fillText('Email: ada@nimbus.example', -490, 70); g.fillText('Web: www.nimbus.example', -490, 140);
+    g.restore();
+    const blob: Blob = await new Promise((r) => c.toBlob((x) => r(x!), 'image/jpeg', 0.9));
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let s = ''; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return btoa(s);
+  }, label);
+  return { name: 'tarjeta-ficticia.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(b64, 'base64') };
 }

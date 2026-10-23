@@ -25,7 +25,7 @@ export async function documentScreen(ctx: Ctx, route: Extract<Route, { name: 'do
   const stage = h('div', { class: 'stack' });
   const imgOf = (e: Evidence, alt: string) => e.mime.startsWith('image/') ? h('img', { src: blobUrl(e.blob), alt, decoding: 'async' }) : h('div', { class: 'empty' }, icon('file'), h('b', null, 'Documento PDF'), h('a', { class: 'btn', href: blobUrl(e.blob), target: '_blank', rel: 'noopener' }, 'Abrir'));
   const draw = () => {
-    history.replaceState({ ...route, view } satisfies Route, '');
+    route.view = view; history.replaceState({ ...route, view } satisfies Route, '');
     stage.replaceChildren(view === 'compare' && processed
       ? h('div', { class: 'compare', id: 'doc-compare' },
           h('figure', null, imgOf(original, 'Foto original'), h('figcaption', null, 'Original (sin modificar)')),

@@ -79,7 +79,7 @@ function fieldCard(ctx: Ctx, c: Capture, it: ReviewItem, ocr: OcrResultRecord[])
     region,
     h('div', { class: 'stack', style: 'gap:4px' }, h('span', { class: 'xs muted strong' }, 'Valor sugerido'),
       h('div', { class: 'suggestion', 'data-suggestion': '1' }, it.value || h('span', { class: 'muted' }, 'Sin valor sugerido'))),
-    it.candidates.length ? h('div', { class: 'row xs' }, h('span', { class: 'muted' }, 'Otras lecturas:'), ...it.candidates.map((v) => h('button', { type: 'button', class: 'btn sm', onClick: () => { input.value = v; input.focus(); } }, v))) : null,
+    it.candidates.length ? h('div', { class: 'row xs' }, h('span', { class: 'muted' }, 'Otras lecturas:'), ...it.candidates.map((v) => h('button', { type: 'button', class: 'btn sm', onClick: () => { input.value = v; input.dispatchEvent(new Event('input')); input.focus(); } }, v))) : null,
     h('div', { class: 'field' }, h('label', { for: `rv-${f}` }, 'Valor final (editable)'), input),
     h('div', { class: 'row' },
       !sameAsOriginal ? h('button', { class: 'btn grow', 'data-keep': f, onClick: () => decide(original!, 'Se conservó el texto original') }, 'Conservar original') : null,
