@@ -8,9 +8,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { privateDir } from './private-dir.mjs';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.resolve(process.argv[2] ?? path.join(root, 'dist'));
 const problems = [];
 const hash = (f, alg) => crypto.createHash(alg).update(fs.readFileSync(f)).digest('hex');
