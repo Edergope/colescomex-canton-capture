@@ -174,9 +174,16 @@ export class UpdateManager {
       if (!this.probe(mode).safe) { this.set({ phase: 'ready' }); this.maybeApply('auto'); return; }
       if (this.retryTimer) { clearInterval(this.retryTimer); this.retryTimer = undefined; }
       store.set({ fromBuild: APP_BUILD, fromVersion: APP_VERSION, at: Date.now() });
-      // SW heredado en espera: pedirle que se active (el SW generado atiende SKIP_WAITING)
-      this.reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
-      (this.opts.reload ?? (() => window.location.reload()))();
+      const reload = this.opts.reload ?? (() => window.location.reload());
+      const waiting = this.reg?.waiting;
+      if (!waiting) { reload(); return; }
+      // SW heredado en espera (publicación sin activación automática): pedirle que se active y recargar
+      // cuando ya controle la página (o a los 5 s), para no cargar otra vez la versión anterior
+      let done = false;
+      const go = () => { if (!done) { done = true; reload(); } };
+      navigator.serviceWorker.addEventListener('controllerchange', go, { once: true });
+      setTimeout(go, 5000);
+      waiting.postMessage({ type: 'SKIP_WAITING' });
     }, delay);
     return true;
   }

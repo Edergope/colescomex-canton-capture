@@ -43,7 +43,8 @@ function versionFile(info: ReturnType<typeof buildInfo>): Plugin {
 // Sin COOP/COEP a propósito: Google Identity Services necesita ventanas emergentes (popup) y
 // el aislamiento de origen las rompe. El OCR corre en WASM SIMD de 1 hilo dentro de un Worker.
 export default defineConfig(({ mode }) => {
-  const instance = (loadEnv(mode, process.cwd()).VITE_INSTANCE || 'production').toLowerCase();
+  const env = { ...loadEnv(mode, process.cwd()), ...process.env };
+  const instance = (env.VITE_INSTANCE || 'production').toLowerCase();
   const preview = instance !== 'production';
   const info = buildInfo(mode);
   return {
@@ -78,8 +79,10 @@ export default defineConfig(({ mode }) => {
         ],
       },
       workbox: {
-        skipWaiting: true,
-        clientsClaim: true,
+        // Activación automática: imprescindible para que las apps instaladas reciban la versión nueva.
+        // (VITE_SW_NO_AUTOACTIVATE=1 solo existe para la prueba de resiliencia de e2e/pwa-update.spec.ts)
+        skipWaiting: env.VITE_SW_NO_AUTOACTIVATE !== '1',
+        clientsClaim: env.VITE_SW_NO_AUTOACTIVATE !== '1',
         // Todo lo indispensable (incluidos modelos OCR y WASM) se precachea en la instalación.
         globPatterns: ['**/*.{js,mjs,css,html,png,svg,ico,webmanifest,wasm,tar,onnx}'],
         // Excluidos: Tesseract (motor alternativo, no por defecto) y el WASM JSEP/WebGPU de ORT que el

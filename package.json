@@ -19,7 +19,8 @@
     "scanner:fixtures": "node --import tsx ocr-eval/make-scanner-fixtures.ts",
     "scanner:eval": "node ocr-eval/run-scanner-eval.mjs",
     "scanner:before-after": "node --import tsx scripts/before-after.ts",
-    "check:private": "node scripts/check-private-data.mjs"
+    "check:private": "node scripts/check-private-data.mjs",
+    "check:dist": "node scripts/check-dist.mjs"
   },
   "dependencies": {
     "idb": "^8.0.4"

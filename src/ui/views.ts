@@ -3,6 +3,7 @@
 import { h, mount, releaseUrls, toast, LazyThumbs, pickerOpen, confirmSheet } from './dom';
 import { icon } from './icons';
 import type { UpdateManager } from '../pwa/update';
+import { updateSafety } from '../pwa/safety';
 import { bottomNav, type NavKey } from './components';
 import { applyTheme, watchSystemTheme } from './theme';
 import type { CaptureApp } from '../app/service';
@@ -79,16 +80,10 @@ export class UI implements Ctx {
    * salvo en pleno disparo o guardado.
    */
   updateSafety(mode: 'auto' | 'manual'): { safe: boolean; reason?: string } {
-    if (pickerOpen()) return { safe: false, reason: 'la cámara del sistema o la galería están abiertas' };
-    if (this.route.name === 'capture') {
-      if (mode === 'auto') return { safe: false, reason: 'hay una captura en curso' };
-      if (this.capture?.isBusy()) return { safe: false, reason: 'se está tomando o guardando una foto' };
-    }
-    if (this.dirty) return { safe: false, reason: 'hay una edición sin guardar' };
-    if (document.querySelector('.scrim, .ce-overlay')) return { safe: false, reason: 'hay un diálogo abierto' };
-    if (this.app.ocr.busy) return { safe: false, reason: 'se está procesando un documento' };
-    if (this.app.sync.busy) return { safe: false, reason: 'se están enviando datos a Google' };
-    return { safe: true };
+    return updateSafety({
+      mode, route: this.route.name, captureBusy: !!this.capture?.isBusy(), pickerOpen: pickerOpen(), dirty: this.dirty,
+      overlayOpen: !!document.querySelector('.scrim, .ce-overlay'), ocrBusy: this.app.ocr.busy, syncBusy: this.app.sync.busy,
+    });
   }
 
   /** Aviso persistente de actualización (no bloquea; se aplica sola en un momento seguro). */

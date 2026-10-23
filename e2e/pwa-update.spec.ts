@@ -20,10 +20,14 @@ const FIXTURE = path.resolve('ocr-eval/fixtures/c2_front_photo.jpg'); // tarjeta
 // ───────────── Servidor estático con raíz intercambiable (simula una nueva publicación) ─────────────
 let root = '';
 const failPaths = new Set<string>();
+/** peticiones recibidas (para comprobar que no se repiten descargas de modelos OCR) */
+const requests: string[] = [];
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
   '.webmanifest': 'application/manifest+json', '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.onnx': 'application/octet-stream', '.tar': 'application/x-tar' };
-const server = http.createServer((req, res) => {
+function staticServer(getRoot: () => string, log?: string[]) { return http.createServer((req, res) => {
+  const root = getRoot();
   const u = decodeURIComponent((req.url ?? '/').split('?')[0]);
+  log?.push(u.slice(BASE.length));
   if (!u.startsWith(BASE)) { res.writeHead(404); res.end(); return; }
   let rel = u.slice(BASE.length) || 'index.html';
   if (failPaths.has(rel)) { res.writeHead(500); res.end('fallo simulado'); return; }
@@ -34,7 +38,13 @@ const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', TYPES[path.extname(file)] ?? 'application/octet-stream');
   res.setHeader('Cache-Control', 'max-age=600');
   fs.createReadStream(file).pipe(res);
-});
+}); }
+const server = staticServer(() => root, requests);
+// segundo origen («Firebase»): mismo contenido inicial, publicación independiente
+let rootF = '';
+const PORT_F = 4182;
+const URL_F = `http://127.0.0.1:${PORT_F}${BASE}`;
+const serverF = staticServer(() => rootF);
 
 const has = (ref: string) => { try { execSync(`git cat-file -e ${ref}^{commit}`, { stdio: 'ignore' }); return true; } catch { return false; } };
 function extract(ref: string, dir: string) {
@@ -42,15 +52,15 @@ function extract(ref: string, dir: string) {
   fs.mkdirSync(dir, { recursive: true });
   execSync(`git archive --format=tar ${ref} | tar -x -C "${dir}"`, { stdio: 'inherit', shell: '/bin/bash' });
 }
-function buildBranch(id: string) {
+function buildBranch(id: string, extraEnv: Record<string, string> = {}) {
   const dir = path.join(OUT, id);
-  execSync(`npx vite build --mode test --outDir "${dir}" --emptyOutDir`, { stdio: 'pipe', env: { ...process.env, VITE_BUILD_ID: id } });
+  execSync(`npx vite build --mode test --outDir "${dir}" --emptyOutDir`, { stdio: 'pipe', env: { ...process.env, VITE_BUILD_ID: id, ...extraEnv } });
   fs.copyFileSync(path.join(dir, 'index.html'), path.join(dir, '404.html'));
   return dir;
 }
 
 const RUN = `${Date.now().toString(36)}`;
-const B1 = `B1-${RUN}`, B2 = `B2-${RUN}`;
+const B1 = `B1-${RUN}`, B2 = `B2-${RUN}`, BW = `BW-${RUN}`;
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   test.setTimeout(600_000);
@@ -58,9 +68,11 @@ test.beforeAll(async () => {
   if (has('deployed/v1.0.0')) extract('deployed/v1.0.0', path.join(OUT, 'A-v1.0.0'));
   if (has('deployed/v1.2.0')) extract('deployed/v1.2.0', path.join(OUT, 'A-v1.2.0'));
   buildBranch(B1); buildBranch(B2);
+  buildBranch(BW, { VITE_SW_NO_AUTOACTIVATE: '1' }); // publicación hipotética SIN activación automática
   await new Promise<void>((r) => server.listen(PORT, r));
+  await new Promise<void>((r) => serverF.listen(PORT_F, r));
 });
-test.afterAll(() => { server.close(); });
+test.afterAll(() => { server.close(); serverF.close(); });
 
 async function isolate(context: BrowserContext) {
   // las versiones de producción intentarían usar Google: nada sale de localhost
@@ -158,6 +170,7 @@ async function legacyToNew(page: Page, context: BrowserContext, legacyDir: strin
 
   // 2. Nueva publicación en el mismo origen; el operador vuelve a abrir la app (navegación normal)
   root = path.join(OUT, B1);
+  requests.length = 0;
   const marker = await page.evaluate(() => ((window as unknown as { __m: number }).__m = Math.random()));
   await page.reload();
   // la versión antigua no envía SKIP_WAITING: el SW nuevo se activa solo y la página se recarga una vez
@@ -185,13 +198,16 @@ async function legacyToNew(page: Page, context: BrowserContext, legacyDir: strin
   expect(after.audit).toContain('HUMAN_EDIT');
   await page.locator('[data-nav="list"]').click();
   await expect(page.locator('#capture-list .supplier')).toHaveCount(2);
-  return { shas };
+  const ocrDownloads = requests.filter((r) => /^ocr-assets\/(models|ort)\//.test(r));
+  return { shas, ocrDownloads };
 }
 
 test('v1.0.0 instalada (la del teléfono) → versión nueva: se actualiza sola sin reinstalar y conserva todo; escáner y OCR funcionan', async ({ page, context }) => {
   test.skip(!has('deployed/v1.0.0'), 'artefacto deployed/v1.0.0 no disponible en este clon');
   test.setTimeout(480_000);
-  await legacyToNew(page, context, path.join(OUT, 'A-v1.0.0'));
+  const { ocrDownloads } = await legacyToNew(page, context, path.join(OUT, 'A-v1.0.0'));
+  // modelos OCR reutilizados del precaché de la v1.0.0: solo se descarga el clasificador de orientación (nuevo en v1.1)
+  expect(ocrDownloads).toEqual(['ocr-assets/models/PP-LCNet_x1_0_doc_ori.onnx']);
 
   // la numeración continúa (sin referencias duplicadas) y la captura nueva pasa por escáner + OCR del precaché nuevo
   await page.locator('#nav-capture').click();
@@ -213,7 +229,8 @@ test('v1.0.0 instalada (la del teléfono) → versión nueva: se actualiza sola 
 test('v1.2.0 publicada hoy → versión nueva: misma garantía', async ({ page, context }) => {
   test.skip(!has('deployed/v1.2.0'), 'artefacto deployed/v1.2.0 no disponible en este clon');
   test.setTimeout(480_000);
-  await legacyToNew(page, context, path.join(OUT, 'A-v1.2.0'));
+  const { ocrDownloads } = await legacyToNew(page, context, path.join(OUT, 'A-v1.2.0'));
+  expect(ocrDownloads).toEqual([]); // modelos idénticos: ninguna descarga repetida
 });
 
 test('actualizaciones siguientes: nunca recarga durante una captura; se aplica al volver a Inicio y se verifica', async ({ page, context }) => {
@@ -248,6 +265,13 @@ test('actualizaciones siguientes: nunca recarga durante una captura; se aplica a
   await page.locator('[data-nav="settings"]').click();
   await expect(page.locator('#app-version')).toHaveAttribute('data-build', B2);
   await expect(page.locator('#update-phase')).toHaveAttribute('data-phase', /current|checking/);
+  // sin bucles: tras aplicar no hay más recargas ni descargas
+  const m2 = await page.evaluate(() => ((window as unknown as { __m2: number }).__m2 = Math.random()));
+  requests.length = 0;
+  await page.evaluate(() => (window as unknown as { __cx: { updater: { check(f: boolean): Promise<unknown> } } }).__cx.updater.check(true));
+  await page.waitForTimeout(15_000);
+  expect(await page.evaluate(() => (window as unknown as { __m2?: number }).__m2)).toBe(m2);
+  expect(requests.filter((r) => !/^(sw\.js|version\.json)$/.test(r))).toEqual([]);
   type W = { __cx: { app: { repo: { list(): Promise<unknown[]> } } } };
   expect(await page.evaluate(async () => (await (window as unknown as W).__cx.app.repo.list()).length)).toBe(1);
 });
@@ -271,13 +295,83 @@ test('descarga interrumpida: la app sigue en la versión actual, informa y reint
   failPaths.clear();
   // sin tocar nada: el reintento automático (15 s) completa la descarga
   // se descarga, se activa y se aplica sola (ajustes = momento seguro); la recarga verifica la compilación nueva
-  await expect.poll(async () => {
-    const d = await safeEval(page, async () => {
-      const reg = await navigator.serviceWorker.getRegistration();
-      const u = (window as unknown as U).__cx?.updater.state;
-      return { build: document.querySelector('#app-version')?.getAttribute('data-build') ?? '', phase: u?.phase, blocked: u?.blockedBy, err: u?.error, inst: reg?.installing?.state, wait: reg?.waiting?.state, ctl: navigator.serviceWorker.controller?.state };
-    });
-    return d?.build ?? '';
-  }, { timeout: 180_000, intervals: [3000] }).toBe(B2);
+  await expect.poll(() => safeEval(page, () => document.querySelector('#app-version')?.getAttribute('data-build') ?? ''), { timeout: 180_000, intervals: [3000] }).toBe(B2);
   await expect(page.getByText(new RegExp(`Actualizada a la versión 1\\.2\\.1 \\(${B2}\\)`))).toBeVisible();
+});
+
+test('edición sin guardar: la versión nueva espera y no se pierde el texto; se aplica tras guardar', async ({ page, context }) => {
+  test.setTimeout(300_000);
+  await isolate(context);
+  root = path.join(OUT, B1);
+  await page.goto(URL0);
+  await page.getByRole('button', { name: 'Continuar como Eder' }).click();
+  await swReady(page);
+  await page.evaluate(async () => {
+    const cx = (window as unknown as { __cx: { app: { repo: { createCapture(u: unknown, e: unknown[]): Promise<unknown> }; auth: { currentUser(): Promise<unknown> } } } }).__cx;
+    await cx.app.repo.createCapture(await cx.app.auth.currentUser(), [{ kind: 'card_front', blob: new Blob(['\xFF\xD8demo'], { type: 'image/jpeg' }) }]);
+  });
+  await page.locator('#btn-list').click();
+  await page.locator('.supplier').first().click();
+  await page.locator('[data-edit="sec-ident"]').click();
+  await page.locator('input[name="contact_name"]').fill('Leo Prueba (sin guardar)');
+  const marker = await page.evaluate(() => ((window as unknown as { __m: number }).__m = Math.random()));
+  root = path.join(OUT, B2);
+  await page.evaluate(() => (window as unknown as { __cx: { updater: { check(f: boolean): Promise<unknown> } } }).__cx.updater.check(true));
+  await expect(page.locator('#update-bar')).toContainText('hay una edición sin guardar');
+  await page.waitForTimeout(12_000);
+  expect(await page.evaluate(() => (window as unknown as { __m?: number }).__m)).toBe(marker);
+  await expect(page.locator('input[name="contact_name"]')).toHaveValue('Leo Prueba (sin guardar)'); // nada se perdió
+  await page.locator('#btn-save-edit').click(); // el usuario guarda: ya es seguro
+  await page.locator('[data-nav="home"]').click();
+  await expect.poll(() => safeEval(page, () => (window as unknown as { __m?: number }).__m ?? 'recargada'), { timeout: 120_000 }).toBe('recargada');
+  await page.waitForLoadState('load');
+  type W = { __cx: { app: { repo: { list(): Promise<{ fields: Record<string, string> }[]> } } } };
+  await expect.poll(() => safeEval(page, async () => (await (window as unknown as W).__cx.app.repo.list())[0].fields.contact_name)).toBe('Leo Prueba (sin guardar)');
+});
+
+test('escenario F: otro origen (como Firebase) es otra app: no se actualiza desde GitHub Pages ni comparte datos', async ({ browser }) => {
+  test.setTimeout(300_000);
+  const context = await browser.newContext({ serviceWorkers: 'allow' });
+  await isolate(context);
+  const page = await context.newPage();
+  root = path.join(OUT, B1); rootF = path.join(OUT, B1);
+  // instalación en el origen «Firebase» con una captura propia
+  await page.goto(URL_F);
+  await page.getByRole('button', { name: 'Continuar como Eder' }).click();
+  await swReady(page);
+  type W = { __cx: { app: { repo: { list(): Promise<{ external_ref: string }[]>; createCapture(u: unknown, e: unknown[]): Promise<{ external_ref: string }> }; auth: { currentUser(): Promise<unknown> } } } };
+  const refF = await page.evaluate(async () => { const cx = (window as unknown as W).__cx; return (await cx.app.repo.createCapture(await cx.app.auth.currentUser(), [{ kind: 'card_front', blob: new Blob(['\xFF\xD8f'], { type: 'image/jpeg' }) }])).external_ref; });
+  // instalación en el origen «GitHub Pages» (mismo navegador, mismo dispositivo)
+  const pageP = await context.newPage();
+  await pageP.goto(URL0);
+  await expect(pageP.locator('#screen-login')).toBeVisible(); // sesión NO compartida
+  await pageP.getByRole('button', { name: 'Continuar como Eder' }).click();
+  await swReady(pageP);
+  expect(await pageP.evaluate(async () => (await (window as unknown as W).__cx.app.repo.list()).length)).toBe(0); // IndexedDB NO compartida
+  // se publica B2 solo en GitHub Pages
+  root = path.join(OUT, B2);
+  await pageP.evaluate(() => (window as unknown as { __cx: { updater: { check(f: boolean): Promise<unknown> } } }).__cx.updater.check(true));
+  await expect.poll(() => safeEval(pageP, async () => (await (await fetch('version.json', { cache: 'no-store' })).json()).build), { timeout: 60_000 }).toBe(B2);
+  await expect.poll(() => safeEval(pageP, () => (window as unknown as { __cx?: { updater: { current: { build: string } } } }).__cx?.updater.current.build ?? ''), { timeout: 120_000 }).toBe(B2);
+  // el origen «Firebase» sigue en B1 aunque se compruebe y recargue: necesita su propia publicación
+  await page.evaluate(() => (window as unknown as { __cx: { updater: { check(f: boolean): Promise<unknown> } } }).__cx.updater.check(true));
+  await page.reload(); await page.waitForTimeout(3000);
+  expect(await page.evaluate(() => (window as unknown as { __cx: { updater: { current: { build: string } } } }).__cx.updater.current.build)).toBe(B1);
+  expect(await page.evaluate(async () => (await (window as unknown as W).__cx.app.repo.list()).map((c) => c.external_ref))).toEqual([refF]);
+  await context.close();
+});
+
+test('resiliencia: si una publicación futura olvidara la activación automática, la app 1.2.1 la activa en un momento seguro', async ({ page, context }) => {
+  test.setTimeout(300_000);
+  expect(fs.readFileSync(path.join(OUT, BW, 'sw.js'), 'utf8')).not.toMatch(/self\.skipWaiting\(\),[a-z]\.clientsClaim\(\)/);
+  await isolate(context);
+  root = path.join(OUT, B1);
+  await page.goto(URL0);
+  await page.getByRole('button', { name: 'Continuar como Eder' }).click();
+  await swReady(page);
+  await page.locator('[data-nav="settings"]').click();
+  root = path.join(OUT, BW);
+  await page.evaluate(() => (window as unknown as { __cx: { updater: { check(f: boolean): Promise<unknown> } } }).__cx.updater.check(true));
+  await expect.poll(() => safeEval(page, () => document.querySelector('#app-version')?.getAttribute('data-build') ?? ''), { timeout: 120_000, intervals: [2000] }).toBe(BW);
+  await expect(page.getByText(new RegExp(`Actualizada a la versión 1\\.2\\.1 \\(${BW}\\)`))).toBeVisible();
 });

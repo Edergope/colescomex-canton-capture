@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { retainPreviousAssets } from './lib/retain-assets.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,27 +32,14 @@ fs.copyFileSync(path.join(distDir, 'index.html'), path.join(distDir, '404.html')
 //     chunks con hash antiguos (workers del OCR y del escáner). Si desaparecen del servidor fallarían con 404.
 //     Solo se conservan los propios de la publicación anterior (no los que ella ya retenía): el tamaño no crece.
 console.log('\n[2b] Conservando assets de la publicación anterior (compatibilidad durante la actualización)...');
-const RETAIN_DIRS = ['assets/', 'ocr-assets/'];
-const retained = [];
 try {
   execSync('git fetch origin gh-pages', { cwd: projectRoot, stdio: 'pipe' });
-  const prevRetained = new Set((() => {
-    try { return JSON.parse(execSync('git show origin/gh-pages:retained-assets.json', { cwd: projectRoot, stdio: 'pipe' }).toString()).files ?? []; } catch { return []; }
-  })());
-  const prevFiles = execSync('git ls-tree -r --name-only origin/gh-pages', { cwd: projectRoot, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 }).toString().split('\n').filter(Boolean);
-  for (const f of prevFiles) {
-    if (!RETAIN_DIRS.some((d) => f.startsWith(d)) || prevRetained.has(f)) continue;
-    const target = path.join(distDir, f);
-    if (fs.existsSync(target)) continue;
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, execSync(`git show "origin/gh-pages:${f}"`, { cwd: projectRoot, stdio: 'pipe', maxBuffer: 256 * 1024 * 1024 }));
-    retained.push(f);
-  }
-  console.log(`✓ ${retained.length} archivo(s) de la versión anterior conservados (no entran en el precaché).`);
+  const { retained, skippedPreviouslyRetained } = retainPreviousAssets({ cwd: projectRoot, ref: 'origin/gh-pages', distDir });
+  console.log(`✓ ${retained.length} archivo(s) de la versión anterior conservados (fuera del precaché); ${skippedPreviouslyRetained.length} antiguos retirados.`);
 } catch (e) {
-  console.log(`(sin publicación anterior que conservar: ${e.message.split('\n')[0]})`);
+  console.log(`(sin publicación anterior que conservar: ${String(e.message).split('\n')[0]})`);
+  fs.writeFileSync(path.join(distDir, 'retained-assets.json'), '{ "files": [] }\n');
 }
-fs.writeFileSync(path.join(distDir, 'retained-assets.json'), `${JSON.stringify({ files: retained }, null, 2)}\n`);
 
 // 3. Verificar repositorio remoto
 const repoName = 'colescomex-canton-capture';

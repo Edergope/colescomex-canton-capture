@@ -1,263 +1,239 @@
-# Auditoría: la app instalada no muestra la v1.2 — diagnóstico y corrección
+# Auditoría PWA COLESCOMEX: la app instalada no se actualiza
 
-- **Rama:** `fix/claude-pwa-update-audit`, creada desde `v1.2.0` (`6c0c9d0`, lo publicado). No toca `main` ni el checkout de Antigravity.
-- **Fecha:** 23-10-2026.
-- **Método:**
-  - inspección de los dos orígenes en vivo (solo lectura);
-  - historial de `gh-pages`;
-  - metadatos de Drive (sin leer contenido personal);
-  - código de vite-plugin-pwa 2.0.0;
-  - pruebas automatizadas que reproducen la actualización en el mismo origen.
+| Dato | Valor |
+|---|---|
+| Rama | `fix/claude-pwa-update-audit`, creada desde `v1.2.0` (`6c0c9d0`, lo publicado hoy) |
+| Fecha | 23-10-2026 |
+| Traspaso a Antigravity | [ANTIGRAVITY_PWA_HANDOFF.md](ANTIGRAVITY_PWA_HANDOFF.md) |
+| Ámbito | Sin cambios en `main`, `gh-pages` ni el checkout de Antigravity. Nada desplegado |
 
----
+**Método:**
 
-## A. Causa comprobada
-
-**La app del teléfono ejecuta la v1.0.0 instalada desde GitHub Pages.** El Service Worker de las versiones publicadas no se activa solo, y el código de la página instalada nunca le pide que lo haga. Por eso la versión nueva se descarga, pero se queda «en espera» mientras la app siga abierta.
-
-### Evidencias
-
-| # | Hecho | Fuente |
-|---|---|---|
-| 1 | `gh-pages` anterior (`9945243`, 22-10 10:22 −05:00) contenía **v1.0.0**. Hoy (`d6d8cd3`, 23-10 04:00 −05:00) hay **v1.2.0**. El despliegue usa `push -f` sobre una rama huérfana | `git log` / `git show` |
-| 2 | Las carpetas `CF26F2-EDR-HDHG-0001` (22-10 15:55 UTC) y `-0002` (23-10 02:30 UTC) están en la carpeta de evidencias de **producción** `1bqlJA…`. Contienen `_01_card_front.jpg`, sin `_scan` ni copia en ORIGINALES: es el comportamiento de la **v1.0.0** | Metadatos de Drive |
-| 3 | La hoja de producción `1UI5…` se modificó a las 02:30:56 UTC, segundos después de crear la carpeta de la 0002 | Metadatos de Drive |
-| 4 | La vista previa de Firebase usa **otra** hoja (`1XZIN…`, «Hoja de PRUEBA») y otras carpetas, tiene el Client ID de OAuth **vacío** y sigue en **v1.1.0**. No pudo producir esas filas | `main-*.js` publicado en `colescomex-capture-preview.web.app` |
-| 5 | El `sw.js` publicado (v1.0.0 y v1.2.0) solo contiene `addEventListener("message", … SKIP_WAITING → skipWaiting())`: **no** hay `skipWaiting()` automático ni `clientsClaim()` | `sw.js` en vivo |
-| 6 | vite-plugin-pwa 2.0.0 solo añade `skipWaiting`/`clientsClaim` si `injectRegister` es `auto`. El proyecto usa `injectRegister: false` | `node_modules/vite-plugin-pwa/dist/index.js:874` |
-| 7 | En modo `autoUpdate`, el cliente `registerSW` **no envía nunca** `SKIP_WAITING`: espera que el SW se active solo y recarga en el evento `activated` | `node_modules/vite-plugin-pwa/dist/client/build/register.js` |
-
-### Consecuencia
-
-1. Al abrir la app, Chrome descarga el `sw.js` de la v1.2.0 y lo instala.
-2. Queda en estado `waiting` hasta que se cierren **todos** los clientes del origen: la app en «Recientes» y cualquier pestaña de Chrome con `edergope.github.io`.
-3. En Android eso casi nunca ocurre por sí solo, así que el teléfono sigue mostrando la v1.0.0.
-
-### Primera instalación frente a actualización
-
-La primera instalación sí funciona, porque no hay SW previo. El fallo afecta **a todas las actualizaciones**, incluidas las futuras desde la v1.2.0.
+- los dos orígenes en vivo (solo lectura);
+- el historial de `gh-pages`;
+- el código de vite-plugin-pwa 2.0.0;
+- metadatos de Drive (sin leer contenido personal);
+- pruebas automatizadas que reproducen la actualización con los artefactos realmente publicados.
 
 ---
 
-## B. Diagnóstico de Antigravity
+## A. Diagnóstico
+
+### Causa comprobada
+
+Las versiones publicadas generan un Service Worker que **solo se activa si la página se lo pide**. Ninguna versión publicada se lo pide nunca.
+
+- **El Service Worker solo se activa con un mensaje.** `vite.config.ts` usa `registerType: 'autoUpdate'` con `injectRegister: false`. En vite-plugin-pwa 2.0.0, `skipWaiting` y `clientsClaim` solo se añaden si `injectRegister` es `auto`. Ver `node_modules/vite-plugin-pwa/dist/index.js:874`. Por eso el `sw.js` publicado (v1.0.0 y v1.2.0) solo contiene `message → SKIP_WAITING → skipWaiting()`.
+- **La página nunca envía ese mensaje.** En modo `autoUpdate`, el cliente `registerSW` no envía `SKIP_WAITING`, porque espera que el SW se active solo. Ver `node_modules/vite-plugin-pwa/dist/client/build/register.js`. En la v1.2.0, `onNeedRefresh → updateSW(true)` no tiene efecto: ese callback no se invoca en `autoUpdate` y `updateSW()` no hace nada.
+- **Resultado:**
+  1. el teléfono descarga la versión nueva;
+  2. queda en estado `waiting`;
+  3. solo se activa cuando se cierran **todas** las ventanas del origen: la app en «Recientes» y las pestañas de Chrome.
+
+  En Android eso casi nunca ocurre. Además afecta a **todas** las actualizaciones, incluidas las futuras desde la v1.2.0.
+
+**Reproducción automatizada:** `node scripts/check-dist.mjs dist-update/A-v1.2.0` falla con «sw.js sin activación automática», y `e2e/pwa-update.spec.ts` reproduce la actualización con los artefactos publicados.
+
+### Origen de la instalación del teléfono
+
+Es un **indicio fuerte, no una prueba**; hay que confirmarlo en el teléfono (sección F).
+
+- **Las carpetas de producción tienen el comportamiento de la v1.0.0.** En la carpeta de evidencias de **producción** (`1bqlJA…`) están `CF26F2-EDR-HDHG-0001` (22-10 15:55 UTC) y `-0002` (23-10 02:30 UTC). Contienen solo `_01_card_front.jpg`, sin `_scan` ni copia en ORIGINALES.
+- **La hoja de producción se modificó a la vez.** La hoja `1UI5…` cambió a las 02:30:56 UTC.
+- **La vista previa de Firebase no encaja.** Está en v1.1.0, usa **otra** hoja (`1XZIN…`, «Hoja de PRUEBA») y otras carpetas, y su Client ID de OAuth está vacío. Con esa configuración publicada no pudo crear esas filas. Además su nombre instalado es «CX PREVIEW».
+- **Conclusión probable:** la app del teléfono es la **v1.0.0 instalada desde `https://edergope.github.io/colescomex-canton-capture/`**.
+- **Lo que estos datos no demuestran:** que no exista además otra instalación, ni que el icono que usa el propietario sea ese.
+
+### Diagnóstico de Antigravity
 
 | Afirmación | Veredicto |
 |---|---|
-| «Es el ciclo de vida del Service Worker» | ✅ Correcto. La causa exacta es el punto 6: `injectRegister: false` desactiva los valores automáticos del plugin |
-| v1.2.0: `onNeedRefresh → updateSW(true)` | ❌ No tiene efecto. En modo `autoUpdate`, `onNeedRefresh` nunca se invoca y `updateSW()` no hace nada (`if (!auto) …`). Por eso la v1.2.0 publicada tampoco se actualizará a la siguiente |
-| v1.2.0: `registration.update()` al volver a primer plano y cada 60 s | ⚠️ Detecta la versión nueva, pero no la activa (punto 5). Además, 60 s es una frecuencia innecesaria en datos móviles |
-| v1.2.0: botón «Buscar actualización» | ⚠️ Solo llama a `update()`: misma limitación |
-| Commit local **no publicado** `15fe3b3`: `skipWaiting: true`, `clientsClaim: true` | ✅ **Necesario** y suficiente para que la actualización **llegue** a la v1.0.0 del teléfono. Mantengo exactamente esas dos líneas |
-| `15fe3b3`: `controllerchange → location.reload()` incondicional | ❌ **Peligroso**. Recarga en cualquier momento: cámara abierta, foto saliendo de la cámara del sistema, edición sin guardar, OCR en curso. Si es durante el OCR, el gobernador lo registra como cierre por memoria y pasa al perfil lento. También duplica la recarga que ya hace `registerSW` en `activated`. **No debe desplegarse.** En mi rama lo sustituye `UpdateManager` |
-| Defecto de Drive: búsqueda por `evidence_id` sin `'<carpeta>' in parents` (`6713478`, ya en v1.2.0) | ✅ Diagnóstico correcto y corrección correcta (detalle abajo) |
-| Prueba de regresión del adaptador en `15fe3b3` | ✅ Correcta. Mis pruebas cubren además el `SyncEngine` completo, la reparación y la fila de Sheets |
-
-### Efecto del defecto de Drive
-
-El `SyncEngine` sube **primero** el respaldo restringido y **después** la carpeta del proveedor.
-
-Cuando una tarjeta no tiene recorte fiable (o con versiones antiguas), el original va a los dos destinos. Al subirlo a la carpeta principal, la búsqueda global encontraba la copia del respaldo y la daba por buena. Como resultado:
-
-- la carpeta del proveedor se quedaba sin la tarjeta;
-- Sheets enlazaba un archivo de la carpeta restringida;
-- la captura se declaraba CONFIRMADA.
-
-La prueba `defecto anterior` lo reproduce.
-
-**Capturas HDHG-0001/0002:** fueron sincronizadas por la v1.0.0, que no tenía respaldo, así que **no están afectadas**.
+| Ciclo de vida del Service Worker | ✅ Correcto |
+| `skipWaiting: true`, `clientsClaim: true` (commit local `15fe3b3`) | ✅ Necesario. Incluido con las mismas líneas |
+| `controllerchange → location.reload()` incondicional (`15fe3b3`) | ❌ Peligroso: interrumpe la cámara, ediciones y OCR, y duplica la recarga de `registerSW`. **No desplegar** |
+| `onNeedRefresh → updateSW(true)`, botón y `update()` cada 60 s (v1.2.0) | ⚠️ No activan nada; solo detectan |
+| Defecto de Drive: búsqueda sin `'<carpeta>' in parents` (`6713478`, ya en v1.2.0) | ✅ Diagnóstico y corrección correctos. Probado además a través de `SyncEngine` (sección E) |
 
 ---
 
-## C. Cambios implementados (rama `fix/claude-pwa-update-audit`)
+## B. Correcciones
 
-### Actualización segura
+### Actualización
 
 | Archivo | Cambio |
 |---|---|
-| `vite.config.ts` | `workbox.skipWaiting` y `clientsClaim` (las mismas líneas que `15fe3b3`). `version.json` publicado fuera del precaché. Identificador de compilación (`VITE_BUILD_ID` o commit) inyectado en la app |
+| `vite.config.ts` | `workbox.skipWaiting`/`clientsClaim` (desactivables solo con `VITE_SW_NO_AUTOACTIVATE=1`, para la prueba de resiliencia). Identificador de compilación (`VITE_BUILD_ID` o commit) inyectado. `version.json` publicado fuera del precaché |
 | `src/pwa/update.ts` (nuevo) | `UpdateManager`, descrito abajo |
-| `src/ui/views.ts` | Sonda de seguridad (ver abajo), aviso no bloqueante «Nueva versión lista» con «Actualizar ahora», aplicación al volver a Inicio y verificación tras recargar |
-| `src/ui/screens/settings.ts` | «Versión y actualizaciones»: versión y compilación instaladas, versión publicada en el servidor, estado, última comprobación, dirección (origen), «Buscar actualización», «Actualizar ahora» y «Copiar diagnóstico» (JSON sin datos personales) |
+| `src/pwa/safety.ts` (nuevo) | Función pura que decide si recargar es seguro. Bloquea con: cámara abierta, foto tomándose o guardándose, cámara del sistema o galería abiertas, edición sin guardar, diálogo abierto, OCR o escáner en curso, envío a Google |
+| `src/ui/views.ts` | Usa la sonda; aviso no bloqueante «Nueva versión lista / Actualizar ahora»; aplica al navegar a una pantalla segura; notifica el resultado. **Corrige** `back()`, que podía salir de la app cuando arrancaba en la cámara con un borrador recuperado |
+| `src/ui/screens/settings.ts` | «Versión y actualizaciones»: versión y compilación instaladas, compilación en el servidor, estado, dirección (origen), «Buscar actualización», «Actualizar ahora» y «Copiar diagnóstico» (sin datos personales) |
 | `src/ui/screens/login.ts` | Versión y compilación visibles antes de iniciar sesión |
-| `src/main.ts` | El SW se registra **antes** de abrir datos o interfaz. Si el arranque falla, se muestra «Reintentar» o «Buscar actualización» y se avisa de que no se borró nada. Se eliminó el bloque `registerSW` sin efecto |
-| `src/ui/dom.ts` | Detecta si la cámara del sistema o la galería están abiertas |
-| `src/pipeline/ocrQueue.ts`, `src/sync/SyncEngine.ts` | Solo lectura: `get busy()` |
-| `scripts/deploy-pages.mjs` | Retención de los assets con hash de la publicación anterior (una versión; no crece) y mensaje de commit con versión y compilación |
-| `package.json`, `src/config/version.ts` | v1.2.1 |
+| `src/main.ts` | El SW se registra **antes** de abrir datos o interfaz. Si el arranque falla: «Reintentar» o «Buscar actualización», sin borrar nada |
+| `src/ui/dom.ts`, `src/ui/screens/capture.ts` | Señales para la sonda: cámara del sistema abierta, disparo o guardado en curso |
+| `src/pipeline/ocrQueue.ts`, `src/sync/SyncEngine.ts` | `get busy()` (solo lectura) |
+| `src/config/version.ts`, `package.json` | 1.2.1 |
 
 **`UpdateManager`:**
 
-- Sigue la descarga (`updatefound` y `statechange`) y detecta instalaciones interrumpidas.
-- Comprueba al volver a primer plano (como mucho una vez por minuto), al recuperar la red y cada 30 min.
-- Usa `onNeedReload` (no recarga a ciegas) y aplica la recarga solo cuando la sonda de seguridad lo permite.
-- Reintenta cada 10 s.
-- Recuerda la versión de origen y verifica tras recargar que la compilación cambió de verdad.
-- Activa a mano un SW en espera heredado (`SKIP_WAITING`).
+- sigue la descarga y detecta descargas interrumpidas;
+- reintenta automáticamente (15 s, con espera creciente hasta 5 min);
+- comprueba al volver a primer plano (como mucho una vez por minuto), al recuperar la red y cada 30 min;
+- recarga **solo** en un momento seguro;
+- verifica tras recargar que la compilación cambió;
+- detecta la activación por dos vías (workbox-window y `controllerchange`), sin condiciones de carrera;
+- activa también un SW «en espera» heredado: envía `SKIP_WAITING` y recarga solo cuando el SW nuevo ya controla la página (o a los 5 s). Probado con una compilación sin activación automática.
 
-**Sonda de seguridad (`updateSafety`):** la recarga automática nunca ocurre si:
+### Despliegue
 
-- la cámara está abierta;
-- la cámara del sistema o la galería están abiertas;
-- hay una edición sin guardar;
-- hay un diálogo o el editor de esquinas abierto;
-- el OCR está en curso;
-- hay una sincronización en curso.
+| Archivo | Cambio |
+|---|---|
+| `scripts/lib/retain-assets.mjs` (nuevo) | Conserva **una versión** de los chunks y modelos anteriores que falten en la nueva. No crece, no pisa archivos nuevos, no toca `index.html` ni `sw.js` y no entra en el precaché |
+| `scripts/deploy-pages.mjs` | Usa el módulo anterior. Mensaje de commit con versión y compilación |
+| `scripts/check-dist.mjs` (nuevo), `npm run check:dist` | Ver abajo |
 
-### Defectos encontrados por las pruebas de actualización (corregidos)
+**`check:dist`** verifica antes de desplegar:
 
-- **«Cerrar la cámara» podía salir de la app.** Ocurría cuando la app arrancaba directamente en la cámara (borrador recuperado, típico tras una actualización): llamaba a `history.back()`. Ahora la navegación hacia atrás nunca sale de la app (`src/ui/views.ts`).
-- **Condición de carrera en `UpdateManager`.** Si la versión nueva se activaba durante una comprobación, el estado «aplicando» se sobrescribía y no se recargaba. Ahora:
-  - el estado nunca se degrada;
-  - `controllerchange` es una señal independiente;
-  - el reintento se mantiene hasta que la recarga ocurre.
-- **Página reclamada en la primera visita.** Si la página se reclamaba en la primera visita (`clientsClaim`), una actualización posterior a una descarga fallida no se detectaba: workbox-window no emite `activated` para ese SW «externo». Ahora se sigue el controlador de forma dinámica.
-- **Reintento tras descarga interrumpida.** El mensaje decía «se reintentará automáticamente», pero no había reintento automático. Ahora se reintenta a los 15 s, con espera creciente hasta 5 min. Verificado tres veces seguidas.
+- `sw.js` con activación automática;
+- cada entrada del precaché existe y su revisión es correcta;
+- los 16 archivos OCR (71,6 MB) son idénticos al origen y están precacheados;
+- no hay secretos, archivos `.env` ni archivos idénticos a fixtures privados.
 
 ### Drive y sincronización
 
 | Archivo | Cambio |
 |---|---|
-| `src/adapters/google.ts` | Una respuesta de Drive sin `id` es un **error**, no un éxito. Antes se guardaba `remote_file_id: undefined` |
-| `src/sync/SyncEngine.ts` + `src/storage/repo.ts` | `repairMisfiledEvidence()` (ver abajo) |
-| `src/app/service.ts` | Ejecuta la reparación al arrancar |
-| `src/adapters/mock.ts` | El mock de Drive busca dentro de la carpeta, igual que Drive real |
+| `src/adapters/google.ts` | Una respuesta de Drive sin `id` es **error**, no éxito |
+| `src/storage/repo.ts`, `src/sync/SyncEngine.ts`, `src/app/service.ts` | Reparación **no destructiva** al arrancar (ver abajo) |
+| `src/adapters/mock.ts` | El mock busca dentro de la carpeta, como Drive real |
 
-**`repairMisfiledEvidence()`** es una reparación **no destructiva**. Se aplica a las evidencias cuyo enlace principal apunta al respaldo (`remote_file_id === archive_file_id`) o con `remote_target: 'archive'` heredado:
+**Reparación no destructiva:** se aplica a las evidencias cuyo enlace principal apunta al respaldo (`remote_file_id === archive_file_id`) o con `remote_target: 'archive'` heredado.
 
-- el enlace pasa a figurar como respaldo y no se borra nada en Drive;
-- la captura queda PENDIENTE;
-- la siguiente sincronización sube la tarjeta a la carpeta del proveedor y corrige la fila;
-- se audita como `DRIVE_LINK_REPAIRED`.
+- El enlace pasa a figurar como respaldo y no se borra nada en Drive.
+- La captura queda PENDIENTE y la siguiente sincronización completa la carpeta del proveedor y corrige la fila.
+- Se audita como `DRIVE_LINK_REPAIRED`.
 
-### Pruebas
+### Pruebas nuevas
 
 | Archivo | Cobertura |
 |---|---|
-| `tests/drive-sync-regression.test.ts` | 9 casos con los adaptadores Google reales contra el emulador (ver abajo) |
-| `e2e/pwa-update.spec.ts` | 4 casos de actualización real en el mismo origen y ruta que GitHub Pages (ver abajo) |
+| `tests/drive-sync-regression.test.ts` | 9 casos |
+| `tests/pwa-safety.test.ts` | 10 casos |
+| `tests/retain-assets.test.ts` | 2 casos |
 | `tests/support/fake-google.ts` | Emulador compartido |
-
-**`tests/drive-sync-regression.test.ts`:**
-
-- destinos correctos con y sin recorte;
-- la misma evidencia en dos carpetas;
-- fila de Sheets = archivos reales;
-- fallo a mitad de la subida → ERROR y reintento sin duplicados;
-- Drive sin `id` → ERROR;
-- Sheets 403 → ERROR;
-- reproducción del defecto anterior;
-- reparación no destructiva;
-- `remote_target: 'archive'` heredado.
-
-**`e2e/pwa-update.spec.ts`:**
-
-- **v1.0.0 real → nueva:** se actualiza sola, sin reinstalar; datos idénticos byte a byte; borrador recuperado; numeración continua; escáner y OCR funcionan.
-- **v1.2.0 real → nueva:** misma garantía.
-- **Nueva → más nueva:** no recarga durante la captura y se aplica al volver.
-- **Descarga interrumpida:** sigue en la versión actual y reintenta.
+| `e2e/pwa-update.spec.ts` | 7 escenarios |
 
 ---
 
-## D. Garantía de que no se pierde ninguna captura
+## C. Validación
 
-1. **Mismo origen, misma base.** La app del teléfono y la versión nueva comparten origen (`https://edergope.github.io`) y alcance (`/colescomex-canton-capture/`). La base IndexedDB es `colescomex-canton-capture`, esquema versión 1, **sin cambios desde la v1.0.0**: no hay migración que pueda fallar.
-2. **Una actualización no toca IndexedDB.** Solo sustituye el código y el precaché (Cache Storage). `cleanupOutdatedCaches` solo borra el precaché antiguo.
-3. **El momento de la recarga.**
-   - La v1.0.0 instalada recargará **una vez** al activarse el SW nuevo; es su propio código y no se puede cambiar.
-   - Sus fotos de borrador se guardan en IndexedDB nada más tomarlas, así que se recuperan tras la recarga (verificado con el artefacto real).
-   - Lo único que podría perderse es una foto que esté **en la cámara del sistema justo en ese instante**. Por eso el procedimiento pide actualizar en Inicio, sin capturar.
-4. **Las versiones siguientes** no recargan nunca durante una captura (prueba automatizada).
-5. **La prueba de la v1.0.0 real** compara SHA-256 de cada foto, el borrador, las correcciones humanas bloqueadas, el estado de sincronización, la auditoría y el consecutivo antes y después.
-6. **Firebase y GitHub Pages son orígenes distintos.** IndexedDB, Service Worker e instalación son independientes. Actualizar uno no afecta al otro, y una app instalada desde Firebase **no** se convertiría en la de GitHub Pages. Como la del teléfono pertenece a GitHub Pages, **no hace falta migrar**.
+Las cifras exactas están en [Resultados](ANTIGRAVITY_PWA_HANDOFF.md#resultados).
 
-> Si en algún momento hubiera que mover datos entre orígenes, el procedimiento sería:
->
-> 1. exportar desde la app de origen a un archivo local (función por implementar);
-> 2. importar en la de destino con verificación de SHA-256 y referencias;
-> 3. dejar la de origen instalada hasta comprobarlo.
->
-> Nunca se accede al almacenamiento de otro origen.
-
----
-
-## E. Qué falta para actualizar el teléfono
-
-1. **Antigravity** integra y despliega esta rama en GitHub Pages (sección F). Hasta entonces, la v1.2.0 publicada **tampoco** se activará sola.
-2. **Antes de actualizar**, en el teléfono:
-   1. Abra la app con Wi-Fi.
-   2. Pulse **Sincronizar**.
-   3. Compruebe que no quedan capturas pendientes (opcional, pero recomendable).
-3. **Actualizar** (no capture durante estos pasos):
-   1. Abra la app y quédese en **Inicio** de 1 a 2 minutos con Wi-Fi.
-   2. La app se recargará sola **una vez**.
-   3. Si tras 3 minutos no cambió:
-      - cierre la app desde **Recientes** (deslizar);
-      - cierre cualquier pestaña de Chrome con `edergope.github.io`;
-      - vuelva a abrirla.
-4. **Verificar:**
-   - **Ajustes → Versión y actualizaciones** muestra **1.2.1** y la compilación publicada, que debe coincidir con `https://edergope.github.io/colescomex-canton-capture/version.json`.
-   - En **Proveedores** siguen las capturas `CF26F2-EDR-HDHG-0001` y `-0002`.
-   - Una captura de prueba se recorta y se lee.
-   - En Drive aparecen `…_scan.jpg` en la carpeta del proveedor y el original en ORIGINALES.
-   - En Sheets se actualiza la misma fila, sin duplicados.
-
-**Identificación del origen en el teléfono** (no borra nada):
-
-- El nombre bajo el icono es «**CX Capture**» si es producción y «**CX PREVIEW**» si es la vista previa.
-- También se puede consultar en Chrome → ⋮ → Configuración → Configuración de sitios → Todos los sitios → `edergope.github.io`. Ahí se ven los datos almacenados. **No pulse «Borrar»**.
-
-**Pruebas físicas:** ninguna prueba en Android físico se ha ejecutado ni se declara aprobada. Las pruebas automatizadas usan Chromium con los artefactos reales.
-
----
-
-## F. Integración y despliegue (Antigravity)
-
-1. **No desplegar `15fe3b3` tal cual.** Integrar esta rama sobre `main`. Al fusionar:
-   - `vite.config.ts` coincide: las dos líneas son idénticas;
-   - en `src/main.ts`, **quedarse con la versión de esta rama**, sin el bloque `controllerchange → reload`;
-   - conservar su prueba de `tests/google-adapters.test.ts`.
-2. Verificar:
-
-   ```bash
-   npm test && npm run build && npm run test:e2e && npm run check:private
-   ```
-
-   `e2e/pwa-update.spec.ts` necesita las etiquetas locales `deployed/v1.0.0` (`9945243`) y `deployed/v1.2.0` (`d6d8cd3`). Sin ellas, sus casos se omiten.
-3. Desplegar con `npm run deploy`. El script conserva los assets de la versión anterior y crea `version.json` y `retained-assets.json`.
-4. Tras desplegar, comprobar:
-   - `version.json` en el servidor;
-   - que `sw.js` contiene `self.skipWaiting()` y `clientsClaim()`, no solo el `message` de `SKIP_WAITING`.
-
-   GitHub Pages sirve con `max-age=600`, así que puede tardar hasta 10 minutos en verse.
-5. Vista previa de Firebase:
-   - está en 1.1.0, con recursos aislados y sin Client ID;
-   - actualizarla es opcional y no afecta al teléfono;
-   - si se despliega, que sea con esta misma rama.
-6. Ejecutar el procedimiento E en el teléfono y registrar el resultado.
-
----
-
-## Resultados de verificación (23-10-2026, rama `fix/claude-pwa-update-audit`)
-
-| Comando | Resultado |
-|---|---|
-| `npm test` | ✅ 135/135, incluidas las 9 de `tests/drive-sync-regression.test.ts` |
-| `npm run build` | ✅. El `sw.js` generado contiene `self.skipWaiting(), e.clientsClaim()` |
-| `npm run test:e2e` | ✅ 24/24 (detalle abajo) |
-| `npm run check:private` | ✅ Sin datos reales |
-
-Desglose de las 24 E2E:
-
-| Archivo | Casos | Notas |
+| Escenario pedido | Prueba | Resultado |
 |---|---|---|
-| `capture.spec.ts` | 5 | Con OCR real y la tarjeta real privada R1 |
-| `ux.spec.ts` | 14 | |
-| `camera-live.spec.ts` | 1 | |
-| `pwa-update.spec.ts` | 4 | v1.0.0 real → nueva; v1.2.0 real → nueva; sin recarga durante la captura; descarga interrumpida con reintento automático |
+| A. Versión antigua (v1.0.0 real) → corregida | `pwa-update`: «v1.0.0 instalada…» | ✅ |
+| B. v1.2.0 real → corregida | `pwa-update`: «v1.2.0 publicada hoy…» | ✅ |
+| C. Captura en curso: cámara | `pwa-update`: «actualizaciones siguientes…» | ✅ Sin recarga durante 12 s con la cámara abierta; se aplica al salir |
+| C. Foto guardándose, cámara del sistema, diálogo, OCR, sincronización | `tests/pwa-safety.test.ts` | ✅ Unitarias; el OCR en curso también se ejercita en E2E (espera a que termine) |
+| C. Edición sin guardar | `pwa-update`: «edición sin guardar…» | ✅ El texto escrito se conserva; se aplica tras guardar |
+| D. Descarga interrumpida | `pwa-update`: «descarga interrumpida…» | ✅ Sigue en la versión operativa, informa y **reintenta sola** |
+| E. Futuras actualizaciones | B1 → B2 en dos escenarios | ✅ Sin parche manual. Sin bucles: 15 s sin recarga ni descargas tras aplicar |
+| F. Otro origen (Firebase) | `pwa-update`: «escenario F…» | ✅ Ver detalle abajo |
+| Resiliencia: publicación futura **sin** activación automática | `pwa-update`: «resiliencia…» (compilada con `VITE_SW_NO_AUTOACTIVATE=1`, solo para la prueba) | ✅ La app 1.2.1 activa el SW en espera en un momento seguro y verifica la compilación |
+| Sin descargas repetidas de modelos | Registro de peticiones del servidor | ✅ v1.2.0 → nueva: **0** descargas de modelos. v1.0.0 → nueva: solo `PP-LCNet_x1_0_doc_ori.onnx` (clasificador nuevo desde v1.1) |
+| Retención de assets | `tests/retain-assets.test.ts` | ✅ Una versión, sin crecer y sin pisar archivos nuevos |
+| Integridad OCR y artefactos | `npm run check:dist` | ✅ 27 entradas de precaché, 16 archivos OCR idénticos y sin secretos |
 
-**No ejecutado (pendiente de verificación física):**
+**Detalle del escenario F** (otro origen, simulado con otra dirección y puerto):
 
-- actualización en el Android real del propietario;
-- WebAPK instalada;
-- TalkBack;
-- red móvil real.
+- sesión e IndexedDB no compartidas;
+- publicar en GitHub Pages actualiza solo esa instalación;
+- la otra sigue en B1 con sus datos.
+
+**Datos comprobados en A y B.** Se leyó IndexedDB directamente, sin pasar por la app:
+
+- SHA-256 de cada foto y del borrador;
+- `capture_uuid`/`external_ref`;
+- campo editado y bloqueado;
+- estados de OCR y sincronización;
+- auditoría y consecutivo (la siguiente captura es `…-0003`/`0004`, sin duplicados);
+- la captura local-only de la v1.0 se sincroniza después sin duplicar la ya confirmada;
+- el escáner y el OCR funcionan con el precaché nuevo.
+
+---
+
+## D. Seguridad de los datos
+
+1. **Misma base, mismo esquema.** IndexedDB `colescomex-canton-capture`, versión de esquema **1**, idéntica desde la v1.0.0: no hay migración. Mismo origen y alcance (`/colescomex-canton-capture/`) y misma URL de `sw.js`: la app no se reinstala.
+2. **Una actualización solo sustituye código y precaché** (Cache Storage). Ningún paso borra IndexedDB, almacenamiento ni cachés generales.
+3. **La única recarga no controlada** es la de la propia v1.0.0, una vez, al activarse la versión nueva: es su código y no se puede cambiar.
+   - Las fotos de su borrador ya están en IndexedDB y se recuperan (probado con el artefacto real).
+   - Solo se perdería una foto **dentro de la cámara del sistema en ese instante**. Por eso el procedimiento pide actualizar en Inicio.
+4. **A partir de la 1.2.1 nunca se recarga en un momento inseguro.** Si el arranque fallara, nada se borra y se puede buscar una corrección.
+5. **Firebase y GitHub Pages son orígenes distintos:** almacenamiento, SW e instalación independientes. Nunca se accede al almacenamiento de otro origen.
+   - Si hubiera que migrar, el procedimiento sería: exportar a un archivo local en la app de origen (función por implementar), importar en la de destino verificando SHA-256 y referencias, y mantener la de origen hasta comprobarlo.
+   - Según el indicio de la sección A, no hace falta migrar.
+
+---
+
+## E. Google Drive
+
+| Comprobación | Simulación (adaptadores reales + emulador) | Google real |
+|---|---|---|
+| Carpeta del proveedor recibe la evidencia correcta (procesada si el recorte es fiable; original si no) | ✅ | ⏳ Pendiente (Antigravity, recursos de QA) |
+| El respaldo restringido recibe el original | ✅ | ⏳ |
+| La misma evidencia en dos destinos = dos archivos independientes | ✅ | ⏳ |
+| El procesado sustituye visualmente al original; el original queda para auditoría | ✅ | ⏳ |
+| Los enlaces de Sheets corresponden a los archivos guardados | ✅ | ⏳ |
+| Reintentos sin duplicados (fallo a mitad de la subida + reenvíos) | ✅ | ⏳ |
+| Error remoto (503, 403 de Sheets, respuesta sin `id`) ≠ «Confirmado en Google» | ✅ | ⏳ |
+| Reproducción del defecto antiguo y reparación no destructiva | ✅ | — |
+
+Todas las pruebas recorren `SyncEngine.syncOne/syncAll` con `GoogleDriveAdapter` y `GoogleSheetsAdapter` reales sobre un emulador HTTP de Drive v3 y Sheets v4. **No se ejecutó nada contra Google real** en esta auditoría.
+
+**HDHG-0001/0002** fueron sincronizadas por la v1.0.0, que no tenía respaldo, así que el defecto no las afecta.
+
+---
+
+## F. Dispositivo físico (pendiente: nada de esto se ha ejecutado)
+
+### 1. Confirmar el origen (sin borrar nada)
+
+- **Icono:** «**CX Capture**» = GitHub Pages; «**CX PREVIEW**» = Firebase.
+- **Chrome:** ⋮ → Configuración → Configuración de sitios → Todos los sitios. Mire qué origen tiene datos (cientos de MB por los modelos): `edergope.github.io` o `colescomex-capture-preview.web.app`. **No pulse «Borrar».**
+
+### 2. Antes de actualizar
+
+Abra la app con Wi-Fi y pulse **Sincronizar**.
+
+### 3. Actualizar
+
+1. Quédese en **Inicio** de 1 a 2 minutos, sin capturar. La app se recarga sola una vez.
+2. Si no cambia: ciérrela desde Recientes, cierre las pestañas de Chrome de ese sitio y reábrala.
+
+### 4. Verificar
+
+- **Ajustes → Versión y actualizaciones** muestra 1.2.1, la compilación igual a la de `…/version.json` y la dirección `edergope.github.io/colescomex-canton-capture/`.
+- Las capturas HDHG-0001/0002 están en Proveedores.
+- Una tarjeta nueva se recorta y se lee.
+- Drive tiene `_scan.jpg` en la carpeta del proveedor y el original en ORIGINALES.
+- Sheets actualiza la misma fila.
+- Sin conexión, la app abre y lee una tarjeta.
+
+---
+
+## G. Despliegue
+
+Ver [ANTIGRAVITY_PWA_HANDOFF.md](ANTIGRAVITY_PWA_HANDOFF.md): integración, conflicto con `15fe3b3`, pruebas, precauciones y reversión.
+
+---
+
+## H. Limitaciones y riesgos abiertos
+
+1. **Sin validación física.** No se ha probado en Android físico, con WebAPK real, TalkBack ni red móvil. Chromium de escritorio con emulación no reproduce la gestión de procesos de Android.
+2. **Recarga única de la v1.0.0.** No se puede controlar (sección D.3).
+3. **Origen de instalación.** Deducido por indicios; confirmación pendiente (sección F.1).
+4. **Google real.** La corrección de Drive y la reparación solo se probaron con emulador.
+5. **Caché de GitHub Pages.** Sirve con `max-age=600`: la versión nueva puede tardar hasta 10 minutos en verse tras desplegar.
+6. **Primer despliegue sin retención.** La v1.2.0 → 1.2.1 retendrá lo que la v1.2.0 tenía. La v1.0.0 ya no está en el servidor (no hubo retención en su momento), pero su página se recarga sola al activarse la nueva, así que no necesita sus chunks.
+7. **Vista previa de Firebase.** Sigue en 1.1.0, sin el arreglo. Solo afecta a quien la tenga instalada.
+8. **Sin exportación de respaldo.** No existe una función para exportar un respaldo local a archivo (necesaria solo para migrar entre orígenes).
