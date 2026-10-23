@@ -67,7 +67,29 @@ async function boot() {
   // Para pruebas E2E e inspección en desarrollo (solo sin Google real).
   if (config.syncMode !== 'google') Object.assign(window, { __cx: { app, drive, sheets, archive: archiveDrive } });
 
-  registerSW({ immediate: true, onOfflineReady() { console.info('[PWA] lista para uso sin conexión'); } });
+  const updateSW = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      // Activa inmediatamente la nueva versión y recarga la página de forma automática
+      void updateSW(true);
+    },
+    onOfflineReady() {
+      console.info('[PWA] lista para uso sin conexión');
+    },
+    onRegisteredSW(_swUrl, registration) {
+      if (!registration) return;
+      // Comprobar actualización al volver al primer plano en el teléfono (desbloqueo / cambio de app)
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          void registration.update().catch(() => undefined);
+        }
+      });
+      // Comprobar actualización automáticamente cada 60 segundos
+      setInterval(() => {
+        void registration.update().catch(() => undefined);
+      }, 60_000);
+    },
+  });
 }
 
 boot().catch((e) => {

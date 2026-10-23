@@ -59,7 +59,21 @@ export async function settingsScreen(ctx: Ctx, all: Capture[]) {
       FEATURES.documentTypes ? sectionCard('set-doctypes', 'file', 'Tipos de documento', h('p', { class: 'small muted' }, 'Vista previa interna. Solo «Tarjeta comercial» está disponible.')) : null,
       sectionCard('set-about', 'info', 'Acerca de', kv([
         ['Versión', APP_VERSION], ['Proyecto', 'COLESCOMEX · Feria de Cantón · Fase 2'],
-      ])),
+      ]), h('button', {
+        class: 'btn sm',
+        type: 'button',
+        id: 'btn-check-update',
+        onClick: async () => {
+          toast('Buscando actualizaciones...');
+          const reg = await navigator.serviceWorker?.getRegistration();
+          if (reg) {
+            await reg.update().catch(() => undefined);
+            toast('Búsqueda completada');
+          } else {
+            toast('Modo de desarrollo');
+          }
+        },
+      }, 'Buscar actualización')),
       h('button', { class: 'btn danger block', id: 'btn-logout', onClick: async () => {
         const ok = await confirmSheet('Cerrar sesión', pending
           ? `Hay ${pending} captura(s) sin confirmar en Google. NO se borrarán: seguirán en este teléfono y se enviarán cuando vuelva a iniciar sesión.`

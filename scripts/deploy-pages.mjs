@@ -17,18 +17,18 @@ function run(cmd, cwd = projectRoot) {
 console.log('=== DESPLIEGUE A GITHUB PAGES (COLESCOMEX CANTON FAIR CAPTURE) ===');
 
 // 1. Compilar aplicación con variables de producción
-console.log('\n[1/5] Compilando aplicación de producción (PWA y assets locales)...');
+console.log('\n[1/4] Compilando aplicación de producción (PWA y assets locales)...');
 run('npm run build');
 
 // 2. Preparar archivos para GitHub Pages (.nojekyll y 404.html)
-console.log('\n[2/5] Configurando .nojekyll y fallback 404.html en dist/...');
+console.log('\n[2/4] Configurando .nojekyll y fallback 404.html en dist/...');
 const distDir = path.join(projectRoot, 'dist');
 fs.writeFileSync(path.join(distDir, '.nojekyll'), '');
 fs.copyFileSync(path.join(distDir, 'index.html'), path.join(distDir, '404.html'));
 
-// 3. Crear repositorio remoto si no existe
+// 3. Verificar repositorio remoto
 const repoName = 'colescomex-canton-capture';
-console.log(`\n[3/5] Verificando repositorio remoto en GitHub (${repoName})...`);
+console.log(`\n[3/4] Verificando repositorio remoto en GitHub (${repoName})...`);
 try {
   execSync(`gh repo view Edergope/${repoName}`, { stdio: 'pipe' });
   console.log(`✓ Repositorio Edergope/${repoName} ya existe.`);
@@ -37,24 +37,8 @@ try {
   run(`gh repo create Edergope/${repoName} --public --description "COLESCOMEX — Canton Fair Capture (Fase 2, China 2026) PWA"`);
 }
 
-// 4. Configurar remoto en el repo principal y subir main si no se ha subido
-console.log('\n[4/5] Asegurando sincronización de código fuente en main...');
-try {
-  execSync('git remote get-url origin', { cwd: projectRoot, stdio: 'pipe' });
-} catch {
-  run(`git remote add origin https://github.com/Edergope/${repoName}.git`);
-}
-
-try {
-  run('git add -A');
-  run('git commit -m "feat: core Canton Fair Capture and live integrations" || true');
-  run('git push -u origin main || true');
-} catch (e) {
-  console.warn('Nota sobre commit/push principal:', e.message);
-}
-
-// 5. Publicar dist/ en la rama gh-pages
-console.log('\n[5/5] Desplegando dist/ en la rama gh-pages...');
+// 4. Publicar dist/ en la rama gh-pages
+console.log('\n[4/4] Desplegando dist/ en la rama gh-pages...');
 const tmpGitDir = path.join(distDir, '.git');
 if (fs.existsSync(tmpGitDir)) {
   fs.rmSync(tmpGitDir, { recursive: true, force: true });
@@ -63,7 +47,7 @@ if (fs.existsSync(tmpGitDir)) {
 run('git init -b gh-pages', distDir);
 run(`git remote add origin https://github.com/Edergope/${repoName}.git`, distDir);
 run('git add -A', distDir);
-run('git commit -m "deploy: PWA production build with self-hosted OCR models"', distDir);
+run('git commit -m "deploy: PWA production build v1.2.0 with Smart Document Scanner and self-hosted OCR models"', distDir);
 run('git push -f origin gh-pages', distDir);
 
 // Configurar GitHub Pages en el repositorio para que sirva desde gh-pages
@@ -79,3 +63,4 @@ console.log('✓ DESPLIEGUE COMPLETADO CON ÉXITO');
 console.log(`URL de producción PWA: https://edergope.github.io/${repoName}/`);
 console.log('Origen JavaScript para Google OAuth: https://edergope.github.io');
 console.log('======================================================');
+
