@@ -6,13 +6,19 @@ const fx = (n: string) => path.join(FX, n);
 
 async function login(page: Page, who = 'Eder') {
   await page.goto('/');
-  await page.getByRole('button', { name: `Soy ${who}` }).click();
+  await page.getByRole('button', { name: `Continuar como ${who}` }).click();
   await expect(page.locator('#btn-register')).toBeVisible();
 }
-async function shoot(page: Page, button: string, file: string) {
+/**
+ * Toma una foto en la cámara de la app. Sin cámara en el navegador de pruebas se usa la galería
+ * (mismo camino que la cámara del sistema). `target` abre antes el destino (reverso, stand…).
+ */
+async function shoot(page: Page, target: string | null, file: string) {
+  if (target) await page.locator(target).click();
   const chooser = page.waitForEvent('filechooser');
-  await page.locator(button).click();
+  await page.locator('#btn-gallery').click();
   await (await chooser).setFiles(file);
+  await expect(page.locator('#btn-save-next, #btn-shoot-front').first()).toBeVisible();
 }
 // El OCR real puede variar en espacios (p. ej. "&EXP"); se compara sin espacios.
 const ns = (s: string) => s.replace(/\s+/g, '');
@@ -25,27 +31,27 @@ test('A/B/C consecutivas con OCR real (PaddleOCR) en segundo plano, fusión y si
   await page.locator('#btn-register').click();
 
   // A: frontal + reverso + stand
-  await shoot(page, '#btn-front', fx('c1_front_photo.jpg'));
+  await shoot(page, null, fx('c1_front_photo.jpg'));
   await shoot(page, '#btn-back-yes', fx('c1_back_photo.jpg'));
-  await shoot(page, '#btn-stand', fx('c2_back_scan.png'));
+  await shoot(page, '#btn-add-stand', fx('c2_back_scan.png'));
   const t0 = Date.now();
   await page.locator('#btn-save-next').click();
-  await expect(page.locator('#btn-front')).toBeVisible(); // nueva captura abierta de inmediato
+  await expect(page.locator('#btn-gallery')).toBeVisible(); // cámara lista para el siguiente proveedor de inmediato
   const saveMs = Date.now() - t0;
+  await expect(page.locator('#saved-toast')).toContainText('Captura protegida en este dispositivo');
 
   // B: solo frontal (mientras A está en OCR)
-  await shoot(page, '#btn-front', fx('c2_front_photo.jpg'));
-  await page.locator('#btn-back-no').click();
+  await shoot(page, null, fx('c2_front_photo.jpg'));
   await page.locator('#btn-save-next').click();
-  await expect(page.locator('#btn-front')).toBeVisible();
+  await expect(page.locator('#btn-gallery')).toBeVisible();
   const during = await captures(page);
   expect(during.some((c) => c.ocr_status === 'PROCESANDO' || c.ocr_status === 'CAPTURADO')).toBe(true);
 
   // C: frontal + producto
-  await shoot(page, '#btn-front', fx('c3_front_photo.jpg'));
-  await page.locator('#btn-back-no').click();
-  await shoot(page, '#btn-product', fx('c4_back_scan.png'));
+  await shoot(page, null, fx('c3_front_photo.jpg'));
+  await shoot(page, '#btn-add-product', fx('c4_back_scan.png'));
   await page.locator('#btn-save-done').click();
+  await expect(page.locator('#btn-register')).toBeVisible();
   expect(saveMs).toBeLessThan(3000);
 
   await expect.poll(async () => (await captures(page)).filter((c) => ['EXTRAIDO', 'REQUIERE_REVISION'].includes(c.ocr_status)).length, { timeout: 180_000 }).toBe(3);
@@ -72,28 +78,29 @@ test('A/B/C consecutivas con OCR real (PaddleOCR) en segundo plano, fusión y si
 
   // sincronización (mock) → confirmado, una fila por captura
   await page.locator('#btn-sync').click();
+  await page.locator('#btn-sync-now').click();
   await expect.poll(async () => (await captures(page)).every((c) => c.sync_status === 'CONFIRMADO'), { timeout: 30_000 }).toBe(true);
   const rows = await page.evaluate(() => (window as never as { __cx: { sheets: { rows: unknown[] } } }).__cx.sheets.rows.length);
   expect(rows).toBe(3);
 
   // lista visible
-  await page.goto('/');
-  await page.getByRole('button', { name: /Ver capturas/ }).click();
-  await expect(page.locator('#capture-list .item')).toHaveCount(3);
+  await page.locator('[data-nav="list"]').click();
+  await expect(page.locator('#capture-list .supplier')).toHaveCount(3);
   await expect(page.locator('#capture-list')).toContainText('NINGBO OCEAN');
+  await expect(page.locator('#capture-list')).toContainText('Confirmado en Google');
 });
 
 test('corrección humana se conserva tras reprocesar OCR', async ({ page }) => {
   await login(page);
   await page.locator('#btn-register').click();
-  await shoot(page, '#btn-front', fx('c6_front_photo.jpg'));
-  await page.locator('#btn-back-no').click();
+  await shoot(page, null, fx('c6_front_photo.jpg'));
   await page.locator('#btn-save-done').click();
   await expect.poll(async () => (await captures(page))[0]?.ocr_status, { timeout: 180_000 }).toMatch(/EXTRAIDO|REQUIERE_REVISION/);
   const [c] = await captures(page);
   expect(c.fields.email).toBe('kevin.huang@greenleafpack.com');
-  await page.getByRole('button', { name: /Ver capturas/ }).click();
-  await page.locator('#capture-list .item').first().click();
+  await page.locator('#btn-list').click();
+  await page.locator('#capture-list .supplier').first().click();
+  await page.locator('[data-edit="sec-ident"]').click();
   await page.locator('input[name="contact_name"]').fill('Kevin Huang (黄凯文)');
   await page.locator('#btn-save-edit').click();
   await page.locator('#btn-reprocess').click();
@@ -107,11 +114,11 @@ test('corrección humana se conserva tras reprocesar OCR', async ({ page }) => {
 test('borrador del asistente sobrevive a que Android cierre la página al abrir la cámara', async ({ page }) => {
   await login(page);
   await page.locator('#btn-register').click();
-  await shoot(page, '#btn-front', fx('c5_front_photo.jpg'));
-  await expect(page.locator('#btn-back-no')).toBeVisible();
+  await shoot(page, null, fx('c5_front_photo.jpg'));
+  await expect(page.locator('#btn-back-yes')).toBeVisible();
   await page.reload(); // la pestaña se recarga como si Android la hubiera descartado
   await expect(page.getByText('Se recuperó una captura sin guardar')).toBeVisible();
-  await page.locator('#btn-back-no').click();
+  await expect(page.locator('#cam-still')).toBeVisible(); // la foto recuperada se muestra
   await page.locator('#btn-save-done').click();
   await expect.poll(async () => (await captures(page)).length).toBe(1);
   expect((await evidences(page, (await captures(page))[0].uuid))[0].size).toBeGreaterThan(100_000);
@@ -133,21 +140,23 @@ test('sin conexión: la app reabre desde caché, captura y sincroniza al volver 
   await context.setOffline(true);
   await page.reload();
   await expect(page.locator('#btn-register')).toBeVisible();
-  await expect(page.getByText(/Sin conexión: puedes seguir capturando/)).toBeVisible();
+  await expect(page.locator('.net-pill')).toContainText('Sin conexión');
   await page.locator('#btn-register').click();
-  await shoot(page, '#btn-front', fx('c4_front_photo.jpg'));
-  await page.locator('#btn-back-no').click();
+  await shoot(page, null, fx('c4_front_photo.jpg'));
   await page.locator('#btn-save-done').click();
   // OCR también sin conexión (modelos desde la caché del service worker)
   await expect.poll(async () => (await captures(page))[0]?.ocr_status, { timeout: 180_000 }).toMatch(/EXTRAIDO|REQUIERE_REVISION/);
   let [c] = await captures(page);
   expect(ns(c.fields.company_name)).toBe(ns('SHENZHEN TOPWAY ELECTRONICS CO.,LTD'));
-  expect(['LOCAL', 'PENDIENTE']).toContain(c.sync_status);
-  await expect(page.locator('[data-sync]').first()).toBeVisible().catch(() => undefined);
+  expect(['LOCAL', 'PENDIENTE', 'ERROR']).toContain(c.sync_status);
+  await page.locator('#btn-list').click();
+  await expect(page.locator('#capture-list .supplier').first()).not.toContainText('Confirmado en Google');
 
   await context.setOffline(false);
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.locator('[data-nav="home"]').click();
   await page.locator('#btn-sync').click();
+  await page.locator('#btn-sync-now').click();
   await expect.poll(async () => (await captures(page))[0].sync_status, { timeout: 30_000 }).toBe('CONFIRMADO');
   [c] = await captures(page);
   expect(c.external_ref).toMatch(/^CF26F2-EDR-/);
@@ -167,14 +176,13 @@ test.describe('tarjetas reales (privadas)', () => {
       const X = rc.expected;
       await login(page);
       await page.locator('#btn-register').click();
-      await shoot(page, '#btn-front', path.join(privateDir(), rc.sides.front.file));
+      await shoot(page, null, path.join(privateDir(), rc.sides.front.file));
       await shoot(page, '#btn-back-yes', path.join(privateDir(), rc.sides.back.file));
       const t0 = Date.now();
       await page.locator('#btn-save-next').click();
-      await expect(page.locator('#btn-front')).toBeVisible(); // J: la siguiente captura no espera al escáner ni al OCR
+      await expect(page.locator('#btn-gallery')).toBeVisible(); // J: la siguiente captura no espera al escáner ni al OCR
       const saveMs = Date.now() - t0;
-      await shoot(page, '#btn-front', fx('c2_front_photo.jpg'));
-      await page.locator('#btn-back-no').click();
+      await shoot(page, null, fx('c2_front_photo.jpg'));
       await page.locator('#btn-save-done').click();
       expect(saveMs).toBeLessThan(3000);
 
@@ -212,6 +220,7 @@ test.describe('tarjetas reales (privadas)', () => {
       // Drive (mock): tarjetas limpias en la carpeta del proveedor; originales en el archivo restringido; una sola fila
       // sin recargar: el Drive simulado vive en memoria (en la app real, Drive persiste)
       await page.locator('#btn-sync').click();
+      await page.locator('#btn-sync-now').click();
       await expect.poll(async () => (await captures(page)).every((c) => c.sync_status === 'CONFIRMADO'), { timeout: 60_000 }).toBe(true);
       const remote = await page.evaluate((ref) => {
         const w = window as never as { __cx: { drive: { files: Map<string, { name: string }> }; archive?: { files: Map<string, { name: string }> }; sheets: { asObjects(): Record<string, string>[] } } };
@@ -223,10 +232,10 @@ test.describe('tarjetas reales (privadas)', () => {
       expect(remote.archive.sort()).toEqual([`${M.external_ref}_01_card_front.jpg`, `${M.external_ref}_02_card_back.jpg`]);
       expect(remote.rows).toBe(1);
 
-      await page.getByRole('button', { name: /Ver capturas/ }).click();
+      await page.locator('[data-nav="list"]').click();
       await page.locator(`[data-ref="${M.external_ref}"]`).click();
       await expect(page.locator('[data-scan="card_front:ok"]')).toContainText('Recortada y enderezada');
-      await expect(page.locator('#ocr-extras')).toContainText(X.extras.qq[0]);
+      await expect(page.locator('[data-kv="qq"]')).toContainText(X.extras.qq[0]);
       await page.screenshot({ path: path.join(privateDir(), 'reports', `e2e-detalle-${rc.id}.png`), fullPage: true });
     });
   }
