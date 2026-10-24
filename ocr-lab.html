@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCR Lab</title>
+  <script type="module" crossorigin src="./assets/lab-EC_ru0Mw.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/tesseract-DOFrzLmd.js">
+<link rel="manifest" href="./manifest.webmanifest"></head>
+<body>
+  <main style="font-family:system-ui;padding:16px;max-width:720px;margin:auto">
+    <h1 style="font-size:20px">OCR Lab · prueba con tarjetas reales</h1>
+    <p>Mide escáner + OCR con fotos reales en ESTE teléfono, en cualquier orientación (no guarda nada).</p>
+    <label>Motor <select id="engine"><option value="paddle">PaddleOCR v5 mobile</option><option value="paddle-tiny">PaddleOCR v6 tiny</option><option value="tesseract">Tesseract.js</option></select></label>
+    <p><label><input type="checkbox" id="scanner" checked> Smart Document Scanner (recorte + orientación)</label></p>
+    <p><input type="file" id="file" accept="image/*" capture="environment"></p>
+    <img id="preview" hidden alt="Documento procesado" style="max-width:100%;border-radius:8px">
+    <pre id="out" style="white-space:pre-wrap;background:#f2f2f2;padding:10px;border-radius:8px"></pre>
+  </main>
+</body>
+</html>
