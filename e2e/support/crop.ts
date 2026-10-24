@@ -26,4 +26,6 @@ export async function resolveCrops(page: Page, choice: CropChoice = 'proposal') 
     await expect(b).toHaveAttribute('aria-pressed', 'true');
   }
   await expect(pending).toHaveCount(0);
+  // decidir no basta: el recorte de cada cara debe EXISTIR (imagen generada) antes de poder guardar
+  await expect(page.locator('.mini-strip .evidence[data-ready="false"]')).toHaveCount(0, { timeout: 90_000 });
 }

@@ -1,5 +1,6 @@
 // PANTALLA 9 — Sincronización: foto local · información extraída · Google confirmado, por separado.
 import { h, toast } from '../dom';
+import { SIMULATED_SYNC } from '../../config/env';
 import { icon } from '../icons';
 import { appBar, emptyState, notice } from '../components';
 import { classifySyncError, type SyncProblem } from '../model';
@@ -66,8 +67,8 @@ export async function syncScreen(ctx: Ctx, all: Capture[]) {
       h('div', { class: 'tracks-3', id: 'sync-stages' },
         stage('photo', 'shield', 'Fotos', `${total}`, 'Protegidas en este dispositivo', total ? 'ok' : ''),
         stage('data', reading ? 'loader' : ocrFailed ? 'alert-circle' : 'check-circle', 'Información', `${extracted}/${total}`, [reading ? `${reading} en proceso` : '', ocrFailed ? `${ocrFailed} con fallo de lectura` : ''].filter(Boolean).join(' · ') || 'Datos extraídos', ocrFailed ? 'err' : reading ? 'info' : extracted ? 'ok' : ''),
-        stage('google', uploading ? 'loader' : 'cloud-ok', 'Google', `${confirmed}/${total}`, uploading ? 'Subiendo a Google' : 'Confirmado en Google', errors.length ? 'err' : confirmed === total && total ? 'ok' : 'info')),
-      h('p', { class: 'xs muted' }, '«Confirmado en Google» indica que Drive y Sheets recibieron la captura. No significa que los datos estén verificados.'),
+        stage('google', uploading ? 'loader' : 'cloud-ok', SIMULATED_SYNC ? 'Google (simulado)' : 'Google', `${confirmed}/${total}`, uploading ? 'Subiendo a Google' : SIMULATED_SYNC ? 'Simulado' : 'Confirmado en Google', errors.length ? 'err' : confirmed === total && total ? 'ok' : 'info')),
+      h('p', { class: 'xs muted' }, SIMULATED_SYNC ? 'Vista previa de pruebas: la sincronización es SIMULADA y nada se envía a Google.' : '«Confirmado en Google» indica que Drive y Sheets recibieron la captura. No significa que los datos estén verificados.'),
       ...[...groups.entries()].map(([kind, g]) => notice(kind === 'offline' ? 'warn' : 'err', kind === 'offline' ? 'wifi-off' : kind === 'auth' ? 'key' : kind === 'permission' ? 'lock' : 'alert-circle',
         g.title, h('p', null, `${g.help}${g.n ? ` (${g.n} captura${g.n === 1 ? '' : 's'})` : ''}`),
         kind === 'auth' ? [((): HTMLButtonElement => { const b: HTMLButtonElement = h('button', { class: 'btn sm primary', id: 'btn-reconnect', onClick: () => reconnect(b) }, icon('key', 'sm'), 'Reconectar Google'); return b; })()] : undefined,
@@ -80,6 +81,6 @@ export async function syncScreen(ctx: Ctx, all: Capture[]) {
       h('h2', { class: 'section-title' }, pending.length ? `Pendientes (${pending.length})` : 'Pendientes'),
       pending.length ? h('div', { class: 'list', id: 'sync-pending' }, ...pending.slice(0, 20).map((c) => supplierCard(ctx, c)),
         pending.length > 20 ? h('button', { class: 'btn ghost block', onClick: () => ctx.go({ name: 'list', filter: 'pending' }) }, `Ver las ${pending.length}`) : null)
-        : emptyState('cloud-ok', 'Todo confirmado en Google', total ? 'No hay capturas pendientes de enviar.' : 'Aún no hay capturas.')),
+        : emptyState('cloud-ok', SIMULATED_SYNC ? 'Todo sincronizado (simulado)' : 'Todo confirmado en Google', total ? 'No hay capturas pendientes de enviar.' : 'Aún no hay capturas.')),
     ctx.nav(null));
 }

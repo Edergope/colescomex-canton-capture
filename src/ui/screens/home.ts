@@ -1,5 +1,6 @@
 // PANTALLA 2 — Inicio: estado de la jornada de un vistazo y acceso inmediato a «Nueva captura».
 import { h } from '../dom';
+import { SIMULATED_SYNC } from '../../config/env';
 import { icon } from '../icons';
 import { appBar, emptyState, metric, notice } from '../components';
 import { matchesFilter } from '../model';
@@ -35,7 +36,7 @@ export async function homeScreen(ctx: Ctx, all: Capture[]) {
         metric(mine.length, 'Hoy', 'clock', { id: 'm-today', onClick: () => ctx.go({ name: 'list' }) }),
         metric(ocrPending, 'Lectura pendiente', 'loader', { id: 'm-ocr', onClick: () => ctx.go({ name: 'list', filter: 'pending' }) }),
         metric(syncPending, 'Sincronización pendiente', 'cloud-up', { id: 'm-sync', onClick: () => ctx.go({ name: 'sync' }) }),
-        metric(confirmed, 'Confirmadas en Google', 'cloud-ok', { id: 'm-confirmed', tone: 'good', onClick: () => ctx.go({ name: 'list', filter: 'confirmed' }) }),
+        metric(confirmed, SIMULATED_SYNC ? 'Sincronizadas (simulado)' : 'Confirmadas en Google', 'cloud-ok', { id: 'm-confirmed', tone: 'good', onClick: () => ctx.go({ name: 'list', filter: 'confirmed' }) }),
         metric(review, 'Requieren revisión', 'alert', { id: 'm-review', tone: review ? 'attention' : undefined, onClick: () => ctx.go({ name: 'review' }) }),
         metric(errors, 'Con errores', 'alert-circle', { id: 'm-errors', tone: errors ? 'error' : undefined, onClick: () => ctx.go({ name: 'list', filter: 'errors' }) })),
       h('p', { class: 'xs muted' }, '«Confirmada en Google» significa que la foto y la fila llegaron a Drive y Sheets; no que los datos estén verificados.'),

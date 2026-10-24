@@ -65,7 +65,9 @@ async function boot() {
   const app = await CaptureApp.create({ dbName: config.dbName, auth, ocr, drive, sheets, scanner, archiveDrive, autoSyncMs: 60_000, autoRepairLinks: config.instance !== 'production' });
   if (config.instance !== 'production') {
     document.body.classList.add('instance-preview');
-    document.body.setAttribute('data-instance', `VISTA PREVIA · ${config.instance} · datos aislados`);
+    // vista previa = solo pruebas: Chrome no debe ofrecer instalarla como si fuera la app oficial
+    window.addEventListener('beforeinstallprompt', (e) => e.preventDefault());
+    document.body.setAttribute('data-instance', `VISTA PREVIA · ${config.instance} · datos aislados${config.syncMode !== 'google' ? ' · sincronización simulada' : ''}`);
     document.title = `[${config.instance.toUpperCase()}] ${document.title}`;
   }
   const storage = await requestPersistentStorage().catch(() => ({ persisted: false }));

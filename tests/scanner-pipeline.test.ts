@@ -163,6 +163,53 @@ describe('escáner + núcleo', () => {
     expect(sheets.asObjects()[0].review_fields).toContain('escaneo');
   });
 
+  it('recorte aprobado MATERIALIZADO: el documento existe al guardar; el final lo sustituye in situ y el OCR lee el recorte', async () => {
+    const { app, archive, drive } = await makeApp({ archive: true });
+    const q = [{ x: 5, y: 5 }, { x: 95, y: 6 }, { x: 94, y: 65 }, { x: 6, y: 64 }];
+    const approved = new Blob([`\xFF\xD8 recorte aprobado\nMOCKOCR\n${FRONT.join('\n')}`], { type: 'image/jpeg' });
+    const c = await app.saveCapture([{ kind: 'card_front', blob: photo({ status: 'not_found', label: 0, lines: FRONT }), crop: { decision: 'manual', quad: q, image: approved, rot: 0 } }]);
+    // Etapa A: antes de cualquier OCR, el documento recortado ya está guardado y enlazado
+    let evs = await app.repo.evidences(c.uuid);
+    const orig = evs.find((e) => e.role === 'original')!;
+    const pre = evs.find((e) => e.role === 'processed')!;
+    expect(pre).toMatchObject({ derived_from: orig.id, preliminary: true, file_name: `${c.external_ref}_01_card_front_scan.jpg` });
+    expect(orig.scan).toMatchObject({ processed_id: pre.id, cropped: true, manual_quad: q });
+    expect(await pre.blob.text()).toContain('recorte aprobado');
+    // mientras se procesa, la carpeta del proveedor espera (ni el original ni el preliminar se suben dos veces)
+    const { uploadPlan } = await import('../src/sync/SyncEngine');
+    expect(uploadPlan((await app.repo.get(c.uuid))!, evs, { archive: true, scannerEnabled: true }).get(pre.id)?.main).toBe('wait');
+    await app.ocr.idle();
+    evs = await app.repo.evidences(c.uuid);
+    const procs = evs.filter((e) => e.role === 'processed');
+    expect(procs).toHaveLength(1); // sustituido in situ: mismo id, mismo nombre, versión final
+    expect(procs[0]).toMatchObject({ id: pre.id, preliminary: false, file_name: pre.file_name });
+    expect(await procs[0].blob.text()).toContain('render');
+    const res = (await app.repo.ocrResults(c.uuid)).find((r) => r.side === 'front')!;
+    expect(res.read_from).toBe(pre.id);
+    await app.syncNow(true);
+    expect([...drive.files.values()].map((f) => f.name)).toEqual([`${c.external_ref}_01_card_front_scan.jpg`]);
+    expect([...archive!.files.values()].map((f) => f.name)).toEqual([`${c.external_ref}_01_card_front.jpg`]);
+  });
+
+  it('sin escáner (fallo o modo mínimo) el OCR lee el RECORTE APROBADO, nunca la foto completa, y el recorte se conserva', async () => {
+    class BrokenScanner extends FakeScanner { async scan(): Promise<ScanSession> { throw new Error('memoria agotada (simulado)'); } }
+    const { app, drive } = await makeApp({ scanner: new BrokenScanner() });
+    const q = [{ x: 5, y: 5 }, { x: 95, y: 6 }, { x: 94, y: 65 }, { x: 6, y: 64 }];
+    const approved = new Blob([`\xFF\xD8 recorte aprobado\nMOCKOCR\n${FRONT.join('\n')}`], { type: 'image/jpeg' });
+    const c = await app.saveCapture([{ kind: 'card_front', blob: photo({ status: 'ok', label: 1, lines: GARBAGE }), crop: { decision: 'auto', quad: q, image: approved, rot: 0 } }]);
+    await app.ocr.idle();
+    const cap = (await app.repo.get(c.uuid))!;
+    expect(cap.fields.company_name).toBe(X.company_name); // datos leídos del recorte, no de la foto
+    expect(cap.scan_issues?.join(' ')).toMatch(/se leyó el recorte aprobado/);
+    const evs = await app.repo.evidences(c.uuid);
+    const proc = evs.find((e) => e.role === 'processed')!;
+    expect(await proc.blob.text()).toContain('recorte aprobado'); // el recorte válido no desaparece
+    expect((await app.repo.ocrResults(c.uuid)).find((r) => r.side === 'front')!.read_from).toBe(proc.id);
+    await app.syncNow(true);
+    // a la carpeta del proveedor va el recorte, nunca la foto original haciéndose pasar por el documento escaneado
+    expect([...drive.files.values()].map((f) => f.name)).toEqual([`${c.external_ref}_01_card_front_scan.jpg`]);
+  });
+
   it('decisiones de recorte en la captura: «auto» viaja como recorte APROBADO, «manual» y «full» como esquinas exactas', async () => {
     const { app, scanner } = await makeApp();
     const q = [{ x: 5, y: 5 }, { x: 95, y: 6 }, { x: 94, y: 65 }, { x: 6, y: 64 }];

@@ -1,5 +1,6 @@
 // PANTALLA 10 — Ajustes: operador, cuenta, tema, conectividad, almacenamiento, rendimiento y cierre de sesión seguro.
 import { h, toast, confirmSheet, liveUrlCount } from '../dom';
+import { IS_PREVIEW } from '../../config/env';
 import { icon } from '../icons';
 import { appBar, kv, sectionCard, segmented } from '../components';
 import { getThemePref, setThemePref, type ThemePref } from '../theme';
@@ -41,7 +42,7 @@ export async function settingsScreen(ctx: Ctx, all: Capture[]) {
       sectionCard('set-storage', 'database', 'Almacenamiento', h('div', { class: 'stack' },
         kv([
           ['Uso', sp ? `${sp.usageMb} de ${sp.quotaMb} MB (${Math.round(sp.ratio * 100)} %)` : undefined],
-          ['Persistente', persisted === undefined ? undefined : persisted ? 'Sí, el navegador lo protege' : 'No garantizado: instale la app'],
+          ['Persistente', persisted === undefined ? undefined : persisted ? 'Sí, el navegador lo protege' : IS_PREVIEW ? 'No garantizado (vista previa de pruebas)' : 'No garantizado: instale la app'],
           ['Capturas en el teléfono', String(all.length)],
         ]),
         sp ? h('div', { class: 'meter', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(sp.ratio * 100)), 'aria-label': 'Almacenamiento usado' },

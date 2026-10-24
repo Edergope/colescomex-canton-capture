@@ -34,7 +34,8 @@ export function uploadPlan(c: Capture, evs: Evidence[], opts: { archive: boolean
   for (const e of evs) {
     const card = e.kind === 'card_front' || e.kind === 'card_back';
     let main: Action, archive: Action = 'skip';
-    if (e.role === 'processed') main = e.superseded_by && !e.remote_file_id ? 'skip' : 'upload';
+    // el recorte aprobado preliminar se sube cuando el proceso final termine (o falle): así no se sube dos veces
+    if (e.role === 'processed') main = e.superseded_by && !e.remote_file_id ? 'skip' : e.preliminary && ocrPending ? 'wait' : 'upload';
     else if (!card || !opts.scannerEnabled) main = 'upload';
     else {
       const processed = evs.find((p) => p.role === 'processed' && p.derived_from === e.id && !p.superseded_by);

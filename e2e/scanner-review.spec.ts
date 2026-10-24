@@ -94,7 +94,7 @@ test('confianza ALTA: ver el recorte no es aprobarlo; guardar sin decidir no gua
   // una sola pulsación acepta el recorte visible
   await page.locator('#btn-crop-auto').click();
   await expect(page.locator('#btn-crop-auto')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.cam-sheet .chip').first()).toContainText('Recorte automático aceptado');
+  await expect(page.locator('.cam-sheet .chip').first()).toContainText('Recorte automático aplicado');
   await expect(page.locator('#crop-pending')).toHaveCount(0);
   await page.screenshot({ path: 'docs/scanner/screenshots/revision-recorte-automatico.jpg', type: 'jpeg', quality: 78 });
   await page.locator('#btn-save-done').click();
@@ -153,7 +153,7 @@ test('escáner colgado: no bloquea; se ofrece conservar la foto completa', async
   await slowScanner(page, -1);
   await pick(page, await fictionalCardJpeg(page));
   await expect(page.locator('#btn-crop-full')).toBeEnabled();
-  await expect(page.locator('.cam-sheet .chip').first()).toContainText('El escáner no respondió', { timeout: 40_000 });
+  await expect(page.locator('.cam-sheet .chip').first()).toContainText('El escáner no respondió', { timeout: 70_000 });
   await saveIsRefused(page);
   await page.locator('#btn-crop-full').click();
   await page.evaluate(() => { (window as unknown as { __scanDelay: number }).__scanDelay = 0; });
@@ -216,7 +216,7 @@ test('ajustar manualmente con lupa: se procesan las esquinas elegidas', async ({
   await page.mouse.up();
   await expect(page.locator('.ce-loupe')).toBeHidden();
   await page.locator('#ce-save').click();
-  await expect(page.locator('.cam-sheet .chip').first()).toContainText('Esquinas ajustadas por usted');
+  await expect(page.locator('.cam-sheet .chip').first()).toContainText('Recorte manual aplicado');
   await expect(page.locator('#cam-still')).toHaveAttribute('data-view', 'crop');
   await page.locator('#btn-save-done').click();
   const front = (await latestEvidences(page)).find((e) => e.kind === 'card_front' && e.role !== 'processed')!;

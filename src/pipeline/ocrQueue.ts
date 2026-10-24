@@ -89,9 +89,12 @@ export class OcrQueue {
     const label = side === 'front' ? 'frontal' : 'reverso';
     const gov = this.opts.governor;
     const mode = gov?.modeFor(attempt) ?? 'normal';
+    // documento recortado ya aprobado y generado (Etapa A): respaldo del OCR si el escáner no puede ejecutarse
+    const current = ev.crop && ev.crop.decision !== 'full' && ev.scan?.processed_id ? await this.repo.getEvidence(ev.scan.processed_id) : undefined;
+    const approvedDocument = current && !current.superseded_by ? current.blob : undefined;
     const r = await processDocument({ ocr: this.engine, scanner: this.opts.scanner, governor: gov },
       // «auto» = recorte automático aprobado: se procesa ese recorte (afinado solo si la detección completa coincide)
-      { blob: ev.blob, profile: BUSINESS_CARD, jobId: uuid, ...(ev.crop?.decision === 'auto' ? { approvedQuad: ev.scan?.manual_quad as never } : { manualQuad: ev.scan?.manual_quad as never }), mode });
+      { blob: ev.blob, profile: BUSINESS_CARD, jobId: uuid, ...(ev.crop?.decision === 'auto' ? { approvedQuad: ev.scan?.manual_quad as never } : { manualQuad: ev.scan?.manual_quad as never }), mode, approvedDocument });
     let procId: string | undefined;
     const a = r.analysis;
     if (a) {
@@ -110,11 +113,12 @@ export class OcrQueue {
     for (const is of r.issues) {
       if (is.code === 'not_cropped') issues.push(`Tarjeta ${label}: ${is.multiple ? 'varias tarjetas en la foto' : 'bordes no detectados con confianza'} — se conserva la foto original; ajuste las esquinas si es necesario`);
       if (is.code === 'orientation_uncertain') issues.push(`Tarjeta ${label}: orientación del texto incierta`);
-      if (is.code === 'scanner_unavailable') issues.push(`Tarjeta ${label}: escáner no disponible (${is.message}); se leyó la foto original`);
-      if (is.code === 'minimal_mode') issues.push(`Tarjeta ${label}: procesada sin escáner tras ${attempt - 1} intento(s) fallido(s) (modo de recuperación); se leyó la foto original`);
+      const read = approvedDocument ? 'se leyó el recorte aprobado' : 'se leyó la foto original';
+      if (is.code === 'scanner_unavailable') issues.push(`Tarjeta ${label}: escáner no disponible (${is.message}); ${read}`);
+      if (is.code === 'minimal_mode') issues.push(`Tarjeta ${label}: procesada sin escáner tras ${attempt - 1} intento(s) fallido(s) (modo de recuperación); ${read}`);
     }
     if (r.ocrError) throw r.ocrError;
-    await this.saveResult(uuid, side, ev.id, r.engine, r.lines, r.ms, r.rotation * 90, procId ?? ev.id);
+    await this.saveResult(uuid, side, ev.id, r.engine, r.lines, r.ms, r.rotation * 90, procId ?? (approvedDocument ? current!.id : ev.id));
     return r.lines;
   }
 

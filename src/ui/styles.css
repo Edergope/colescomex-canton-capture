@@ -291,14 +291,21 @@ body.camera-open { overflow: hidden; }
 .login .notice { color: var(--ink); }
 
 /* ── Corrector de esquinas ── */
-.ce-overlay { position: fixed; inset: 0; z-index: 80; background: #05080e; display: grid; grid-template-rows: auto 1fr auto auto; color: #fff; }
-.ce-head, .ce-foot { padding: var(--s3) var(--s4); display: flex; gap: var(--s2); align-items: center; }
-.ce-head { padding-top: calc(var(--safe-t) + var(--s3)); }
-.ce-foot { padding-bottom: calc(var(--safe-b) + var(--s3)); flex-wrap: wrap; }
-.ce-foot .btn { flex: 1 1 calc(50% - var(--s2)); min-width: 0; } /* 4 botones: 2 filas en móvil, «Aplicar» siempre visible */
-.ce-stage { position: relative; margin: auto; max-width: 100%; touch-action: none; }
-.ce-img { display: block; max-width: 100vw; max-height: 70dvh; }
-.ce-svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+/* Editor de esquinas: alto = área VISIBLE real (dvh: barras dinámicas de Chrome); la imagen se ajusta a la fila
+   flexible (minmax(0,1fr)) y el pie con «Aplicar» queda siempre dentro de la pantalla, por encima de la navegación por gestos. */
+.ce-overlay { position: fixed; top: 0; left: 0; right: 0; height: 100vh; height: 100dvh; z-index: 80; background: #05080e; color: #fff;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; overflow: hidden; }
+.ce-head { padding: calc(var(--safe-t) + var(--s2)) var(--s3) var(--s2); display: flex; gap: var(--s2); align-items: flex-start; }
+.ce-help { margin: 2px 0 0; font-size: var(--t-xs); color: #c9d4e5; line-height: 1.35; }
+.ce-stage { position: relative; min-height: 0; display: grid; place-items: center; overflow: hidden; touch-action: none; padding: 0 var(--s2); }
+.ce-frame { position: relative; }
+.ce-img { display: block; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; }
+.ce-svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; overflow: visible; }
+.ce-error { margin: 0; padding: var(--s2) var(--s4); background: #4a1410; color: #ffd9d4; font-size: var(--t-sm); }
+.ce-foot { display: grid; gap: var(--s2); padding: var(--s2) var(--s3) calc(var(--s3) + max(var(--safe-b), 12px)); background: #05080e; border-top: 1px solid rgba(255,255,255,.08); }
+.ce-secondary { display: flex; gap: var(--s2); }
+.ce-secondary .btn { flex: 1 1 0; min-width: 0; min-height: 48px; white-space: normal; line-height: 1.15; }
+.ce-foot #ce-save { width: 100%; min-height: 52px; }
 .ce-poly { fill: rgba(47, 106, 224, .2); stroke: #8db3ff; stroke-width: 3; vector-effect: non-scaling-stroke; }
 .ce-handle { fill: rgba(244, 180, 0, .92); stroke: #fff; stroke-width: 3; vector-effect: non-scaling-stroke; }
 
@@ -350,16 +357,36 @@ body.camera-open .update-bar { bottom: auto; top: calc(var(--safe-t) + 64px); }
 /* Lupa del editor de esquinas */
 .ce-loupe { position: absolute; top: 8px; width: 132px; height: 132px; border-radius: var(--r-full); border: 3px solid #fff; box-shadow: 0 4px 18px rgba(0,0,0,.6); pointer-events: none; z-index: 2; }
 .ce-handle.active { fill: rgba(141, 179, 255, .95); }
-/* Revisión del recorte en la captura */
-.crop-review { display: grid; gap: var(--s2); }
-.crop-review .crop-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
-.crop-review .crop-actions .btn { flex-direction: column; gap: 2px; min-height: 60px; padding: 6px 4px; font-size: var(--t-xs); }
-.crop-review .crop-actions .btn[aria-pressed="true"] { border-color: var(--primary); background: var(--primary-soft); color: var(--link); }
-/* cara sin decisión: se resalta la revisión; guardar queda visualmente inactivo (al pulsarlo se explica qué falta) */
-.crop-review.pending { outline: 2px dashed var(--warn); outline-offset: 4px; border-radius: 12px; }
-.crop-review:focus { outline-style: solid; }
+/* Revisión del recorte en la captura: qué cara, en qué estado y qué hacer, con botones legibles */
+.crop-review { display: grid; gap: var(--s2); padding: var(--s3); border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface-2, var(--surface)); }
+.crop-review .crop-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+.crop-review .crop-head b { font-size: var(--t-md); }
+.crop-review p { margin: 0; }
+.crop-review .crop-actions { display: grid; gap: var(--s2); }
+.crop-review .crop-actions .btn { min-height: 48px; font-size: var(--t-sm); line-height: 1.2; white-space: normal; justify-content: center; }
+.crop-review .crop-alt { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+.crop-review .crop-actions .btn[aria-pressed="true"]:not(.primary) { border-color: var(--primary); background: var(--primary-soft); color: var(--link); }
+/* cara pendiente: se resalta; cara resuelta: borde verde */
+.crop-review.pending { border: 2px dashed var(--warn); }
+.crop-review.done { border: 2px solid var(--ok); }
+.crop-review:focus { outline: 3px solid var(--primary); outline-offset: 2px; }
+.mini-strip .evidence .face-state { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: var(--r-full); display: grid; place-items: center; color: #fff; }
+.mini-strip .evidence .face-state.ok { background: var(--ok); }
+.mini-strip .evidence .face-state.todo { background: #a86400; }
+.mini-strip .evidence[aria-pressed="true"] { outline: 3px solid var(--primary); outline-offset: 1px; }
+.camera .cam-badge { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 14px; border-radius: var(--r-full); background: rgba(0,0,0,.72); color: #fff; font-weight: 650; display: inline-flex; gap: 6px; align-items: center; }
+.camera .view-toggle { position: absolute; top: 8px; right: 8px; }
+#crop-ready { color: var(--ok); font-weight: 600; margin: 0; }
+/* texto aumentado (Android): los botones del panel parten el texto en lugar de salirse de la pantalla */
+.camera { grid-template-columns: minmax(0, 1fr); }
+.camera .cam-top { min-width: 0; }
+.camera .cam-top .steps { min-width: 0; overflow-x: auto; scrollbar-width: none; justify-content: safe center; }
+.camera .cam-sheet { grid-template-columns: minmax(0, 1fr); overflow-x: hidden; }
+.camera .cam-sheet > .row { flex-wrap: wrap; }
+.camera .cam-sheet .extras-grid { grid-template-columns: repeat(auto-fit, minmax(min(72px, 100%), 1fr)); }
+.camera .cam-sheet .btn { white-space: normal; min-width: 0; max-width: 100%; text-align: center; line-height: 1.2; }
 #crop-pending { color: var(--warn); font-weight: 600; margin: 0; }
 .cam-sheet .btn[data-blocked] { opacity: .55; }
 .camera .still.crop { object-fit: contain; background: #111; }
 /* la vista previa del recorte nunca queda tapada: la hoja ocupa como máximo ~55 % y se desplaza */
-.camera .cam-sheet { max-height: 55dvh; overscroll-behavior: contain; }
+.camera .cam-sheet { max-height: 52dvh; overscroll-behavior: contain; }

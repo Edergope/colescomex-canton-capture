@@ -1,6 +1,7 @@
 // Modelo de presentación: traduce el estado técnico de una captura a mensajes claros para el operador.
 // Funciones puras (sin DOM): se prueban en tests/ui-model.test.ts.
 import { OCR_FIELDS, type Capture, type CommercialField, type FieldMeta, type OcrField } from '../domain/schema';
+import { SIMULATED_SYNC } from '../config/env';
 
 export type Tone = 'ok' | 'warn' | 'err' | 'info' | 'neutral';
 export interface Track { tone: Tone; icon: string; label: string; detail?: string; busy?: boolean }
@@ -54,7 +55,9 @@ export function googleTrack(c: Capture): Track {
     case 'LOCAL': return { tone: 'neutral', icon: 'cloud', label: 'Pendiente de sincronización', detail: 'Aún no se ha enviado' };
     case 'PENDIENTE': return { tone: 'info', icon: 'cloud-up', label: 'Pendiente de sincronización', detail: c.synced_revision ? 'Hay cambios por enviar' : 'Esperando turno de envío' };
     case 'SINCRONIZANDO': return { tone: 'info', icon: 'loader', label: 'Subiendo a Google', busy: true };
-    case 'CONFIRMADO': return { tone: 'ok', icon: 'cloud-ok', label: 'Confirmado en Google', detail: 'Fotos y fila confirmadas por Drive y Sheets' };
+    case 'CONFIRMADO': return SIMULATED_SYNC
+      ? { tone: 'neutral', icon: 'cloud-ok', label: 'Sincronización simulada', detail: 'Vista previa: nada se envió a Google' }
+      : { tone: 'ok', icon: 'cloud-ok', label: 'Confirmado en Google', detail: 'Fotos y fila confirmadas por Drive y Sheets' };
     case 'ERROR': { const p = classifySyncError(c.sync_error); return { tone: p.kind === 'offline' ? 'warn' : 'err', icon: p.kind === 'offline' ? 'cloud-off' : 'alert-circle', label: p.title, detail: p.help }; }
   }
 }

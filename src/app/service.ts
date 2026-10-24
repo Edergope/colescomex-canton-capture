@@ -92,6 +92,18 @@ export class CaptureApp {
 
   async reprocessOcr(uuid: string) { await this.ocr.reprocess(uuid, await this.user()); }
 
+  /**
+   * Recorte aprobado sobre una captura guardada: el documento recortado ya generado (y visto) pasa a ser el procesado
+   * vigente al instante; después se vuelve a leer la tarjeta (las correcciones humanas bloqueadas se conservan).
+   */
+  async applyCrop(evidenceId: string, quad: { x: number; y: number }[], decision: 'manual' | 'full' | 'auto', image: Blob, rot: number) {
+    const u = await this.user();
+    const ev = await this.repo.getEvidence(evidenceId);
+    if (!ev) throw new Error('Evidencia inexistente');
+    await this.repo.applyCrop(evidenceId, quad, decision, image, rot, u);
+    await this.ocr.reprocess(ev.capture_uuid, u);
+  }
+
   /** Ajuste manual de esquinas (excepcional) y reproceso de la captura con ellas. */
   async setManualCorners(evidenceId: string, quad: { x: number; y: number }[] | undefined, decision: 'manual' | 'full' | 'auto' = 'manual') {
     const u = await this.user();

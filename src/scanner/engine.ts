@@ -14,13 +14,22 @@ import { MODE_PARAMS, type ProcessingMode, type ResourceGovernor } from '../pipe
 import type { Quad } from './homography';
 
 export interface EngineDeps { ocr: OCRAdapter; scanner?: DocumentScanner; governor?: ResourceGovernor }
-export interface ProcessInput { blob: Blob; profile: DocumentProfile; jobId: string; manualQuad?: Quad; /** recorte automático aprobado (ver ScanOptions) */ approvedQuad?: Quad; mode?: ProcessingMode }
+export interface ProcessInput {
+  blob: Blob; profile: DocumentProfile; jobId: string; manualQuad?: Quad; /** recorte automático aprobado (ver ScanOptions) */ approvedQuad?: Quad; mode?: ProcessingMode;
+  /**
+   * Documento recortado YA APROBADO y generado (procesado vigente). Si el escáner no puede ejecutarse (modo mínimo,
+   * memoria, fallo), el OCR lee ESTE documento: un recorte aprobado nunca se sustituye en silencio por la foto completa.
+   */
+  approvedDocument?: Blob;
+}
 
 export type EngineIssue =
   | { code: 'not_cropped'; multiple: boolean; reasons: string[] }
   | { code: 'orientation_uncertain' }
   | { code: 'scanner_unavailable'; message: string }
-  | { code: 'minimal_mode' };
+  | { code: 'minimal_mode' }
+  /** sin escáner, se leyó el documento recortado ya aprobado (no la foto completa) */
+  | { code: 'read_approved_document' };
 
 export interface ProcessedDocument {
   lines: OcrLine[];
@@ -54,7 +63,10 @@ export async function processDocument(deps: EngineDeps, input: ProcessInput): Pr
     } finally { await governor?.end(); }
   };
   const plain = async (): Promise<ProcessedDocument> => {
-    try { return { lines: await runOcr(input.blob), engine: ocr.name, rotation: 0, issues, mode, ms: Date.now() - t0 }; }
+    // sin escáner: el recorte aprobado (si existe) o, solo si no hay ninguno, la foto
+    const src = input.approvedDocument ?? input.blob;
+    if (input.approvedDocument) issues.push({ code: 'read_approved_document' });
+    try { return { lines: await runOcr(src), engine: ocr.name, rotation: 0, issues, mode, ms: Date.now() - t0 }; }
     catch (e) { return { lines: [], engine: ocr.name, rotation: 0, issues, mode, ms: Date.now() - t0, ocrError: e }; }
   };
 

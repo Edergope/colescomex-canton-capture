@@ -144,7 +144,11 @@ function evidenceBlock(ctx: Ctx, c: Capture, evs: Evidence[]) {
   const scans = originals.filter((e) => e.scan).map((e) => {
     const sc = e.scan!;
     // la decisión del OPERADOR manda; sin ella, el recorte es automático y no fue revisado por una persona
-    const CROP: Record<string, [string, 'ok' | 'warn']> = { auto: ['Recorte automático aceptado por usted', 'ok'], manual: ['Esquinas ajustadas por usted', 'ok'], full: ['Foto completa (sin recorte)', 'ok'] };
+    // «aplicado» solo si el documento recortado EXISTE; si no, se dice que está pendiente (nunca un falso éxito)
+    const has = !!sc.processed_id && evs.some((p) => p.id === sc.processed_id);
+    const CROP: Record<string, [string, 'ok' | 'warn']> = has
+      ? { auto: ['Recorte automático aplicado (aceptado por usted)', 'ok'], manual: ['Recorte manual aplicado', 'ok'], full: ['Foto completa (sin recorte)', 'ok'] }
+      : { auto: ['Recorte aceptado · documento pendiente de generar', 'warn'], manual: ['Esquinas guardadas · documento pendiente de generar', 'warn'], full: ['Foto completa (sin recorte)', 'ok'] };
     const [label, tone] = e.crop ? CROP[e.crop.decision] : sc.multiple ? ['Varias tarjetas: se usa la foto original', 'warn' as const]
       : sc.status === 'ok' ? ['Recorte automático · sin revisar', 'warn' as const] : SCAN_LABEL[sc.status] ?? ['Sin procesar', 'warn' as const];
     return h('div', { class: 'row small', 'data-scan': `${e.kind}:${sc.status}` },

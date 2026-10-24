@@ -11,7 +11,9 @@ export interface DeviceInfo { device_id: string; device_code: string }
 export interface NewEvidence {
   kind: EvidenceKind; blob: Blob; name?: string;
   /** decisión de recorte tomada en la vista previa (esquinas en la foto con EXIF aplicado) */
-  crop?: { decision: CropDecision['decision']; quad?: { x: number; y: number }[]; detector?: CropDecision['detector'] };
+  crop?: { decision: CropDecision['decision']; quad?: { x: number; y: number }[]; detector?: CropDecision['detector'];
+    /** documento recortado YA GENERADO y visto por el operador (se guarda como procesado preliminar) */
+    image?: Blob; /** cuartos de vuelta aplicados a `image` */ rot?: number };
 }
 export interface QuickFields { hall?: string; booth?: string; notes?: string; product_interest?: string }
 
@@ -66,7 +68,8 @@ export class CaptureRepo {
     const nowIso = this.now().toISOString();
     const capUuid = uuid();
     // Leer los Blobs ANTES de abrir la transacción (una tx de IndexedDB se cierra si se espera otra cosa).
-    const prepared = await Promise.all(evidences.map(async (e, i) => ({ ...e, seq: i + 1, mime: e.blob.type || 'application/octet-stream', sha256: await sha256(e.blob) })));
+    const prepared = await Promise.all(evidences.map(async (e, i) => ({ ...e, seq: i + 1, mime: e.blob.type || 'application/octet-stream', sha256: await sha256(e.blob),
+      cropSha: e.crop?.image && e.crop.decision !== 'full' ? await sha256(e.crop.image) : undefined })));
 
     const tx = this.db.transaction(['meta', 'captures', 'evidences', 'audit'], 'readwrite');
     const meta = tx.objectStore('meta');
@@ -85,16 +88,27 @@ export class CaptureRepo {
       if (v && v.trim()) { fields[k as CommercialField] = v.trim(); field_meta[k as CommercialField] = { source: 'human', status: 'ok', locked: true }; }
     }
 
-    const evRecords: Evidence[] = prepared.map((e) => ({
-      id: uuid(), capture_uuid: capUuid, kind: e.kind, seq: e.seq, blob: e.blob, mime: e.mime, size: e.blob.size,
-      file_name: `${external_ref}_${String(e.seq).padStart(2, '0')}_${e.kind}.${extFor(e.mime, e.name)}`,
-      created_at: nowIso, role: 'original', sha256: e.sha256,
-      ...(e.crop ? {
-        crop: { decision: e.crop.decision, decided_at: nowIso, decided_by: user.id, detector: e.crop.detector },
-        // las esquinas que el operador vio (o ajustó) son las que usa el procesamiento: lo visto es lo que se guarda
-        ...(e.crop.quad?.length === 4 ? { scan: { status: 'manual', confidence: 1, multiple: false, reasons: [], cropped: false, rotation: 0, orientation_source: 'none', orientation_confident: false, at: nowIso, manual_quad: e.crop.quad } as EvidenceScan } : {}),
-      } : {}),
-    }));
+    const evRecords: Evidence[] = [];
+    for (const e of prepared) {
+      const id = uuid();
+      const base = `${external_ref}_${String(e.seq).padStart(2, '0')}_${e.kind}`;
+      // ETAPA A: el recorte aprobado y ya generado se guarda como documento procesado desde el primer momento
+      const proc: Evidence | undefined = e.crop?.image && e.cropSha && e.crop.quad?.length === 4 ? {
+        id: uuid(), capture_uuid: capUuid, kind: e.kind, seq: e.seq, blob: e.crop.image, mime: 'image/jpeg', size: e.crop.image.size,
+        file_name: `${base}_scan.jpg`, created_at: nowIso, role: 'processed', derived_from: id, sha256: e.cropSha, preliminary: true,
+      } : undefined;
+      evRecords.push({
+        id, capture_uuid: capUuid, kind: e.kind, seq: e.seq, blob: e.blob, mime: e.mime, size: e.blob.size,
+        file_name: `${base}.${extFor(e.mime, e.name)}`, created_at: nowIso, role: 'original', sha256: e.sha256,
+        ...(e.crop ? {
+          crop: { decision: e.crop.decision, decided_at: nowIso, decided_by: user.id, detector: e.crop.detector },
+          // las esquinas que el operador vio (o ajustó) son las que usa el procesamiento: lo visto es lo que se guarda
+          ...(e.crop.quad?.length === 4 ? { scan: { status: 'manual', confidence: 1, multiple: false, reasons: [], cropped: !!proc, rotation: (e.crop.rot ?? 0) * 90,
+            orientation_source: proc ? 'classifier' : 'none', orientation_confident: false, at: nowIso, manual_quad: e.crop.quad, processed_id: proc?.id } as EvidenceScan } : {}),
+        } : {}),
+      });
+      if (proc) evRecords.push(proc);
+    }
     const capture: Capture = {
       uuid: capUuid, external_ref, fields, field_meta, evidence_ids: evRecords.map((e) => e.id),
       ocr_status: 'CAPTURADO', ocr_attempts: 0, review_status: 'SIN_REVISAR',
@@ -183,9 +197,13 @@ export class CaptureRepo {
     const cap = await tx.objectStore('captures').get(captureUuid);
     if (!orig || !cap) { await tx.done; throw new Error('Evidencia o captura inexistente'); }
     let procId: string | undefined;
-    if (processed) {
+    const prev = processed && orig.scan?.processed_id ? await evStore.get(orig.scan.processed_id) : undefined;
+    if (processed && prev && prev.preliminary && !prev.superseded_by && !prev.remote_file_id) {
+      // el recorte aprobado (vista previa) se sustituye IN SITU por la versión final de las mismas esquinas: mismo id y nombre
+      procId = prev.id;
+      await evStore.put({ ...prev, blob: processed, size: processed.size, sha256: digest, preliminary: false });
+    } else if (processed) {
       procId = uuid();
-      const prev = orig.scan?.processed_id ? await evStore.get(orig.scan.processed_id) : undefined;
       if (prev && !prev.superseded_by) await evStore.put({ ...prev, superseded_by: procId });
       const n = (await evStore.index('by_capture').getAll(captureUuid)).filter((e) => e.derived_from === originalId).length;
       const nowIso = this.now().toISOString();
@@ -216,6 +234,38 @@ export class CaptureRepo {
     await tx.objectStore('audit').add({ capture_uuid: e.capture_uuid, at: this.now().toISOString(), actor: user.id, type: 'MANUAL_CORNERS', detail: { evidence: evidenceId, quad, decision: quad ? decision : 'auto_detect' } });
     await tx.done;
     this.emit(e.capture_uuid);
+  }
+
+  /**
+   * Recorte aprobado sobre una captura YA GUARDADA (pantalla Documento): fija las esquinas y la decisión y registra
+   * el documento recortado ya generado como procesado vigente (preliminar), sustituyendo —sin borrar— al anterior.
+   */
+  async applyCrop(evidenceId: string, quad: { x: number; y: number }[], decision: CropDecision['decision'], image: Blob, rot: number, user: UserProfile): Promise<string> {
+    const digest = await sha256(image);
+    const tx = this.db.transaction(['captures', 'evidences', 'audit'], 'readwrite');
+    const evStore = tx.objectStore('evidences');
+    const orig = await evStore.get(evidenceId);
+    const cap = orig ? await tx.objectStore('captures').get(orig.capture_uuid) : undefined;
+    if (!orig || !cap || orig.role === 'processed') { await tx.done; throw new Error('Solo se recorta la foto original'); }
+    const nowIso = this.now().toISOString();
+    const procId = uuid();
+    const prev = orig.scan?.processed_id ? await evStore.get(orig.scan.processed_id) : undefined;
+    if (prev && !prev.superseded_by) await evStore.put({ ...prev, superseded_by: procId });
+    const n = (await evStore.index('by_capture').getAll(orig.capture_uuid)).filter((e) => e.derived_from === evidenceId).length;
+    await evStore.add({
+      id: procId, capture_uuid: orig.capture_uuid, kind: orig.kind, seq: orig.seq, blob: image, mime: 'image/jpeg', size: image.size,
+      file_name: `${cap.external_ref}_${String(orig.seq).padStart(2, '0')}_${orig.kind}_scan${n ? `_v${n + 1}` : ''}.jpg`,
+      created_at: nowIso, role: 'processed', derived_from: evidenceId, sha256: digest, preliminary: true,
+    });
+    cap.evidence_ids = [...cap.evidence_ids, procId];
+    await tx.objectStore('captures').put(cap);
+    const scan: EvidenceScan = { ...(orig.scan ?? { confidence: 1, multiple: false, reasons: [], orientation_confident: false }), status: 'manual', cropped: true,
+      rotation: rot * 90, orientation_source: 'classifier', at: nowIso, manual_quad: quad, processed_id: procId } as EvidenceScan;
+    await evStore.put({ ...orig, scan, crop: { decision, decided_at: nowIso, decided_by: user.id, detector: orig.crop?.detector } });
+    await tx.objectStore('audit').add({ capture_uuid: orig.capture_uuid, at: nowIso, actor: user.id, type: 'MANUAL_CORNERS', detail: { evidence: evidenceId, quad, decision, processed: procId } });
+    await tx.done;
+    this.emit(orig.capture_uuid);
+    return procId;
   }
 
   /** Corrección humana: fija el valor y lo bloquea frente a reprocesos OCR. */

@@ -123,6 +123,11 @@ export interface Evidence {
   derived_from?: string;
   /** procesado sustituido por un reproceso posterior (se conserva, no se sube si no se subió ya) */
   superseded_by?: string;
+  /**
+   * Procesado generado al APROBAR el recorte (vista previa, menor resolución). Existe desde el guardado, sin depender
+   * del OCR; el proceso final lo sustituye in situ por la versión a resolución completa si aún no se subió.
+   */
+  preliminary?: boolean;
   /** carpeta remota de `remote_file_id`: siempre la principal del proveedor (versiones ≤1.1-rc usaban 'archive') */
   remote_target?: 'main' | 'archive';
   /** copia en el RESPALDO RESTRINGIDO de originales (independiente de la carpeta principal) */

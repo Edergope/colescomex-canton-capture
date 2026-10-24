@@ -2,6 +2,7 @@
 // (/colescomex-canton-capture/), con los artefactos que estuvieron publicados:
 //   · deployed/v1.0.0 → la versión que ejecuta el teléfono del propietario (gh-pages 9945243)
 //   · deployed/v1.2.0 → la publicada hoy (gh-pages d6d8cd3)
+//   · deployed/v1.2.1 → la producción actual antes de v1.2.2 (gh-pages c493c74)
 // y esta rama compilada dos veces (B1, B2) para probar las actualizaciones siguientes.
 // Datos 100 % ficticios. Las versiones de producción no pueden acceder a Google: todo lo externo se bloquea.
 import { test, expect as baseExpect, type Page, type BrowserContext } from '@playwright/test';
@@ -73,6 +74,7 @@ test.beforeAll(async () => {
   fs.mkdirSync(OUT, { recursive: true });
   if (has('deployed/v1.0.0')) extract('deployed/v1.0.0', path.join(OUT, 'A-v1.0.0'));
   if (has('deployed/v1.2.0')) extract('deployed/v1.2.0', path.join(OUT, 'A-v1.2.0'));
+  if (has('deployed/v1.2.1')) extract('deployed/v1.2.1', path.join(OUT, 'A-v1.2.1'));
   buildBranch(B1); buildBranch(B2);
   buildBranch(BW, { VITE_SW_NO_AUTOACTIVATE: '1' }); // publicación hipotética SIN activación automática
   await new Promise<void>((r) => server.listen(PORT, r));
@@ -162,7 +164,7 @@ const snapshot = (page: Page) => page.evaluate(async () => {
   return out;
 });
 
-async function legacyToNew(page: Page, context: BrowserContext, legacyDir: string) {
+async function legacyToNew(page: Page, context: BrowserContext, legacyDir: string, o: { safeMoment?: boolean } = {}) {
   await isolate(context);
   // 1. Instalación existente (artefacto publicado) con datos del operador
   root = legacyDir;
@@ -179,6 +181,16 @@ async function legacyToNew(page: Page, context: BrowserContext, legacyDir: strin
   requests.length = 0;
   const marker = await page.evaluate(() => ((window as unknown as { __m: number }).__m = Math.random()));
   await page.reload();
+  if (o.safeMoment) {
+    // v1.2.1 reabre el borrador en la cámara y NUNCA recarga durante una captura: la actualización espera…
+    await expect(page.locator('#screen-capture')).toBeVisible();
+    const inCapture = await page.evaluate(() => ((window as unknown as { __m2: number }).__m2 = Math.random()));
+    await page.waitForTimeout(12_000);
+    expect(await page.evaluate(() => (window as unknown as { __m2?: number }).__m2)).toBe(inCapture); // no se recargó con la cámara abierta
+    expect(await page.evaluate(() => (window as unknown as { __cx?: unknown }).__cx ? 'nueva' : 'antigua')).toBe('antigua');
+    // …y se aplica sola en cuanto el operador vuelve a Inicio (el borrador sigue protegido)
+    await page.locator('#btn-cam-close').click();
+  }
   // la versión antigua no envía SKIP_WAITING: el SW nuevo se activa solo y la página se recarga una vez
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cx?: unknown }).__cx ? 'nueva' : 'antigua').catch(() => 'navegando'), { timeout: 180_000 }).toBe('nueva');
   await page.waitForLoadState('load');
@@ -187,9 +199,15 @@ async function legacyToNew(page: Page, context: BrowserContext, legacyDir: strin
   expect(await controllerScript(page)).toBe(oldSw); // misma URL de SW: sin reinstalar la app
 
   // 3. Interfaz nueva con la versión verificable
-  await expect(page.getByText('Se recuperó una captura sin guardar')).toBeVisible();
-  await expect(page.locator('#screen-capture')).toBeVisible(); // el borrador de la v1.0 se reabre
-  await page.locator('#btn-cam-close').click();
+  if (!o.safeMoment) {
+    await expect(page.getByText('Se recuperó una captura sin guardar')).toBeVisible();
+    await expect(page.locator('#screen-capture')).toBeVisible(); // el borrador de la v1.0 se reabre
+    await page.locator('#btn-cam-close').click();
+  } else {
+    // el borrador sigue guardado (se comprueba byte a byte más abajo); si la versión nueva lo reabre, se vuelve a Inicio
+    await expect(page.locator('#screen-capture, [data-nav="settings"]').first()).toBeVisible();
+    if (await page.locator('#screen-capture').isVisible()) await page.locator('#btn-cam-close').click();
+  }
   await page.locator('[data-nav="settings"]').click();
   await expect(page.locator('#app-version')).toHaveAttribute('data-build', B1);
   await expect.poll(async () => (await page.request.get(`${URL0}version.json`)).json()).toMatchObject({ build: B1 });
@@ -239,6 +257,13 @@ test('v1.2.0 publicada hoy → versión nueva: misma garantía', async ({ page, 
   test.setTimeout(480_000);
   const { ocrDownloads } = await legacyToNew(page, context, path.join(OUT, 'A-v1.2.0'));
   expect(ocrDownloads).toEqual([]); // modelos idénticos: ninguna descarga repetida
+});
+
+test('v1.2.1 en producción → v1.2.2: misma garantía (datos, borrador, sin reinstalar, sin descargas repetidas)', async ({ page, context }) => {
+  test.skip(!has('deployed/v1.2.1'), 'artefacto deployed/v1.2.1 no disponible en este clon');
+  test.setTimeout(480_000);
+  const { ocrDownloads } = await legacyToNew(page, context, path.join(OUT, 'A-v1.2.1'), { safeMoment: true });
+  expect(ocrDownloads).toEqual([]); // mismos modelos OCR que la producción actual
 });
 
 test('actualizaciones siguientes: nunca recarga durante una captura; se aplica al volver a Inicio y se verifica', async ({ page, context }) => {

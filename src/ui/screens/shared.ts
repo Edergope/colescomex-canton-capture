@@ -1,5 +1,6 @@
 // Piezas compartidas entre pantallas (tarjeta de proveedor, miniatura diferida, avisos globales).
 import { h } from '../dom';
+import { IS_PREVIEW, SIMULATED_SYNC } from '../../config/env';
 import { icon } from '../icons';
 import { chip, notice, trackChip } from '../components';
 import { dataTrack, displayName, googleTrack, relTime, reviewItems } from '../model';
@@ -42,7 +43,9 @@ export async function deviceNotices(ctx: Ctx): Promise<HTMLElement[]> {
   if (ctx.info.configProblems.length) out.push(notice('err', 'alert-circle', 'Sincronización bloqueada por configuración', h('p', null, 'Las capturas se guardan en el teléfono, pero no se enviarán a Google hasta corregir la configuración. Avise al responsable técnico.'), undefined, 'config-warn'));
   const sp = await storagePressure().catch(() => null);
   if (sp && sp.ratio > 0.85) out.push(notice('warn', 'database', 'Almacenamiento insuficiente', h('p', null, `El teléfono tiene ${sp.usageMb} de ${sp.quotaMb} MB ocupados. Sincronice con Google pronto; no borre la app.`), undefined, 'storage-warn'));
-  if (ctx.info.storage && !ctx.info.storage.persisted) out.push(notice('info', 'shield', 'Instale la app en la pantalla de inicio', h('p', null, 'El navegador no garantizó almacenamiento persistente. Instalada, sus capturas están más protegidas.')));
+  if (SIMULATED_SYNC) out.push(notice('warn', 'alert', 'Vista previa de pruebas', h('p', null, 'Sincronización SIMULADA: nada se envía a Google. Use la app oficial para capturas reales. No instale esta vista previa.'), undefined, 'preview-warn'));
+  // la vista previa es solo para pruebas: no se recomienda instalarla
+  if (!IS_PREVIEW && ctx.info.storage && !ctx.info.storage.persisted) out.push(notice('info', 'shield', 'Instale la app en la pantalla de inicio', h('p', null, 'El navegador no garantizó almacenamiento persistente. Instalada, sus capturas están más protegidas.')));
   const g = ctx.app.governor;
   if (g?.profile === 'low') out.push(notice('info', 'gauge', 'Modo de bajo consumo activo', h('p', null, `El escáner y la lectura se alternan para no agotar la memoria (${g.state.reason}). Es más lento pero más estable.`),
     [h('button', { class: 'btn sm', onClick: async () => { await g.setProfile('standard', 'elegido por el usuario'); ctx.refresh(); } }, 'Usar modo estándar')], 'low-memory'));

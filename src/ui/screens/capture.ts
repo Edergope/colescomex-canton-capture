@@ -6,6 +6,7 @@ import { icon } from '../icons';
 import { chip } from '../components';
 import { LiveCamera, HintDetector, type HintResult } from '../camera';
 import { FEATURES, DOC_TYPES } from '../features';
+import { SIMULATED_SYNC } from '../../config/env';
 import { EVIDENCE_LABELS, type EvidenceKind, type UserProfile } from '../../domain/schema';
 import { ScanPreview, cropState, fullFrame, CROP_LABEL, DECIDED, type PreviewResult } from '../scan-preview';
 import { openCornerEditor } from './corners';
@@ -15,16 +16,25 @@ import type { CaptureApp } from '../../app/service';
 import type { Ctx } from '../views';
 
 /** Recorte propuesto por el escáner real y decisión del operador (se guarda en el borrador al instante). */
-interface DraftCrop { decision?: 'auto' | 'manual' | 'full'; quad?: Quad; /** propuesta original del detector */ autoQuad?: Quad; detector?: { status: string; confidence: number }; reasons?: string[]; source?: { width: number; height: number } }
+interface DraftCrop {
+  decision?: 'auto' | 'manual' | 'full'; quad?: Quad; /** propuesta original del detector */ autoQuad?: Quad;
+  detector?: { status: string; confidence: number }; reasons?: string[]; source?: { width: number; height: number };
+  /** documento recortado y enderezado YA GENERADO para `imageQuad` (se guarda como documento procesado) */
+  image?: Blob; imageQuad?: Quad; rot?: number;
+  /** último fallo al generar el recorte (se muestra con «Reintentar») */
+  renderError?: string;
+}
 interface DraftEvidence { kind: EvidenceKind; blob: Blob; name?: string; crop?: DraftCrop }
 /** Formato compatible con el borrador previo (`meta draft:<userId>`). */
 export interface Draft { step: 'front' | 'askBack' | 'back' | 'extras'; evidences: DraftEvidence[]; quick: QuickFields }
 const emptyDraft = (): Draft => ({ step: 'front', evidences: [], quick: {} });
 const isCardFace = (e: DraftEvidence) => (e.kind === 'card_front' || e.kind === 'card_back') && e.blob.type.startsWith('image/');
-/** Caras de la tarjeta sin decisión de recorte del operador: la captura no puede terminarse. */
-const pendingFaces = (d: Draft) => d.evidences.filter((e) => isCardFace(e) && !e.crop?.decision);
-/** Si el escáner no responde en este tiempo, se ofrece seguir sin él (nunca se bloquea al operador). */
-const ANALYSIS_TIMEOUT_MS = 20_000;
+const sameQuad = (a?: Quad, b?: Quad) => !!a && !!b && a.length === 4 && a.every((p, i) => p.x === b[i]?.x && p.y === b[i]?.y);
+/** El recorte decidido EXISTE (imagen generada para esas mismas esquinas) o la decisión es la foto completa. */
+const materialized = (e: DraftEvidence) => e.crop?.decision === 'full' || (!!e.crop?.decision && !!e.crop.image && sameQuad(e.crop.imageQuad, e.crop.quad));
+/** Caras de la tarjeta sin decisión del operador o con un recorte aún no generado: la captura no puede terminarse. */
+const pendingFaces = (d: Draft) => d.evidences.filter((e) => isCardFace(e) && !materialized(e));
+const pendingText = (e: DraftEvidence) => `${SHORT[e.kind].toLowerCase()} (${e.crop?.decision ? 'recorte sin generar' : 'falta decidir'})`;
 
 export async function loadDraft(app: CaptureApp, user: UserProfile): Promise<Draft> {
   const d = (await app.repo.getMeta<Draft>(`draft:${user.id}`)) ?? emptyDraft();
@@ -56,6 +66,10 @@ export class CaptureFlow {
   private urls = new Set<string>();
   private lastShot?: { blob: Blob; kind: EvidenceKind; ev?: DraftEvidence; preview?: PreviewResult | 'error' };
   private scanPreview = new ScanPreview();
+  /** caras cuyo recorte se está generando ahora */
+  private rendering = new Set<DraftEvidence>();
+  /** ver la foto original en lugar del recorte (comprobación visual) */
+  private viewOriginal = false;
 
   private root = h('div', { class: 'camera', id: 'screen-capture', role: 'region', 'aria-label': 'Cámara de captura' });
   private video = h('video', { autoplay: true, muted: true, playsInline: true, 'aria-hidden': 'true' });
@@ -204,65 +218,105 @@ export class CaptureFlow {
 
   /**
    * Vista previa REAL del recorte (mismo escáner que el procesamiento). La foto ya está guardada en el borrador;
-   * el análisis solo propone esquinas: nada se valida sin una decisión del operador.
+   * el análisis solo propone esquinas: nada se valida sin una decisión del operador. Una cara ya decidida con su
+   * recorte generado no se vuelve a analizar; si la decisión aún no tiene su recorte, se genera.
    */
   private async analyzeShot() {
     const shot = this.lastShot; const ev = shot?.ev;
-    if (!shot || !ev || !ev.blob.type.startsWith('image/') || !(ev.kind === 'card_front' || ev.kind === 'card_back')) return;
+    if (!shot || !ev || !isCardFace(ev)) return;
+    const d = ev.crop?.decision;
+    if ((d === 'auto' || d === 'manual')) {
+      if (!materialized(ev) && !this.rendering.has(ev) && !ev.crop?.renderError) void this.materialize(ev);
+      this.draw(); return;
+    }
     shot.preview = undefined; this.draw();
     try {
-      // se fuerza el recorte elegido: esquinas ajustadas, o el recorte dudoso que el operador decidió usar
-      const forced = ev.crop?.decision === 'manual' || (ev.crop?.decision === 'auto' && ev.crop.detector?.status !== 'ok') ? ev.crop.quad : undefined;
-      let timer = 0;
-      const r = await Promise.race([
-        this.scanPreview.analyze(ev.blob, forced),
-        new Promise<never>((_, rej) => { timer = window.setTimeout(() => rej(new Error('timeout')), ANALYSIS_TIMEOUT_MS); }),
-      ]).finally(() => clearTimeout(timer));
-      if (!r || this.closed || this.lastShot !== shot) return;
-      shot.preview = r;
+      const r = await this.scanPreview.analyze(ev.blob);
+      if (this.closed) return;
       const a = r.analysis;
-      // con esquinas forzadas se conserva el diagnóstico original del detector (trazabilidad)
       // «no encontrado» = no hay propuesta (nunca se inventan esquinas); fiable o dudoso = propuesta revisable
       const proposal = a.status === 'ok' || a.status === 'low_confidence' ? a.quad : undefined;
-      if (forced) ev.crop = { ...ev.crop, source: a.source };
-      else {
-        const diag = { source: a.source, reasons: a.reasons, detector: { status: a.status, confidence: a.confidence }, autoQuad: proposal };
-        // una decisión tomada mientras se analizaba (p. ej. «foto completa») no se pisa: solo se completa
-        const d = ev.crop?.decision;
-        ev.crop = d ? { ...ev.crop, ...diag, quad: d === 'full' ? fullFrame(a) : ev.crop!.quad } : { ...ev.crop, ...diag, quad: proposal };
-      }
+      const diag = { source: a.source, reasons: a.reasons, detector: { status: a.status, confidence: a.confidence }, autoQuad: proposal };
+      // una decisión tomada mientras se analizaba no se pisa: solo se completa
+      const now = ev.crop?.decision;
+      ev.crop = now ? { ...ev.crop, ...diag, quad: now === 'full' ? fullFrame(a) : ev.crop!.quad } : { ...ev.crop, ...diag, quad: proposal };
       await this.persist();
+      if (this.lastShot === shot) shot.preview = r;
     } catch {
-      if (this.lastShot === shot) { shot.preview = 'error'; this.scanPreview.cancel(); }
+      if (this.lastShot === shot) shot.preview = 'error';
     }
     if (!this.closed && this.lastShot === shot) this.draw();
   }
 
+  /** Estado del recorte de una cara: generado, generándose o fallido. */
+  private renderState(ev: DraftEvidence): 'ok' | 'pending' | 'error' {
+    if (materialized(ev)) return 'ok';
+    if (this.rendering.has(ev)) return 'pending';
+    return ev.crop?.renderError ? 'error' : 'pending';
+  }
+
+  /**
+   * ETAPA A — genera de verdad el documento recortado y enderezado para las esquinas decididas, comprueba que la
+   * imagen existe y la guarda en el borrador. Independiente del OCR. Devuelve false (con el error visible) si falla.
+   */
+  private async materialize(ev: DraftEvidence): Promise<boolean> {
+    const quad = ev.crop?.quad; if (!quad || !ev.crop) return false;
+    this.rendering.add(ev); ev.crop.renderError = undefined;
+    if (!this.closed) this.draw();
+    try {
+      const m = await this.scanPreview.materialize(ev.blob, quad);
+      if (ev.crop?.quad !== quad) return false; // las esquinas cambiaron mientras tanto
+      ev.crop = { ...ev.crop, image: m.image, imageQuad: quad, rot: m.rot, source: ev.crop.source ?? m.source, renderError: undefined };
+      await this.persist();
+      return true;
+    } catch (e) {
+      if (ev.crop?.quad === quad) ev.crop.renderError = (e as Error).message || 'Error desconocido';
+      return false;
+    } finally {
+      this.rendering.delete(ev);
+      if (!this.closed) this.draw();
+    }
+  }
+
   private currentCropState() {
-    const shot = this.lastShot; if (!shot?.ev?.kind.startsWith('card_')) return null;
-    if (shot.preview === 'error') return shot.ev.crop?.decision ? cropState(undefined, shot.ev.crop.decision) : 'error' as const;
-    return cropState(shot.preview?.analysis, shot.ev.crop?.decision);
+    const shot = this.lastShot; const ev = shot?.ev; if (!ev || !isCardFace(ev)) return null;
+    const d = ev.crop?.decision;
+    if (d) return cropState(undefined, d, this.renderState(ev));
+    if (shot!.preview === 'error') return 'error' as const;
+    return cropState(shot!.preview?.analysis);
   }
 
   private async decideCrop(decision: 'auto' | 'manual' | 'full') {
     const shot = this.lastShot; const ev = shot?.ev; if (!shot || !ev) return;
+    this.viewOriginal = false;
     if (decision === 'manual') {
-      await openCornerEditor({ blob: ev.blob, quad: ev.crop?.quad }, {
+      // se abre la foto ORIGINAL con las últimas esquinas elegidas (o la propuesta del detector)
+      const start = ev.crop?.decision === 'full' ? ev.crop.autoQuad : ev.crop?.quad ?? ev.crop?.autoQuad;
+      await openCornerEditor({ blob: ev.blob, quad: start }, {
         title: `Ajustar esquinas · ${SHORT[ev.kind]}`,
-        onSave: async (q) => { ev.crop = { ...ev.crop, decision: 'manual', quad: q as Quad }; await this.persist(); void this.analyzeShot(); },
+        workingLabel: 'Generando recorte…',
+        onSave: async (q) => {
+          ev.crop = { ...ev.crop, decision: 'manual', quad: q as Quad, image: undefined, imageQuad: undefined, renderError: undefined };
+          await this.persist();
+          if (!(await this.materialize(ev))) throw new Error(`No se pudo generar el recorte: ${ev.crop?.renderError ?? 'error desconocido'}. Sus esquinas se conservan; pulse «Aplicar» para reintentar.`);
+        },
         onFull: async () => this.decideCrop('full'),
       });
       return;
     }
-    const a = shot.preview && shot.preview !== 'error' ? shot.preview.analysis : undefined;
-    if (decision === 'full') ev.crop = { ...ev.crop, decision: 'full', quad: ev.crop?.source ? fullFrame({ source: ev.crop.source }) : undefined };
-    else { // aceptar el recorte automático propuesto (solo si existe una propuesta)
-      if (!ev.crop?.autoQuad) return;
-      ev.crop = { ...ev.crop, decision: 'auto', quad: ev.crop?.autoQuad ?? a?.quad ?? ev.crop?.quad };
-      if (ev.crop.detector?.status === undefined && a) ev.crop.detector = { status: a.status, confidence: a.confidence };
+    const pv = shot.preview && shot.preview !== 'error' ? shot.preview : undefined;
+    if (decision === 'full') {
+      ev.crop = { ...ev.crop, decision: 'full', quad: ev.crop?.source ? fullFrame({ source: ev.crop.source }) : undefined, image: undefined, imageQuad: undefined, renderError: undefined };
+      await this.persist(); this.draw(); return;
     }
+    // aceptar el recorte automático propuesto (solo si existe una propuesta)
+    const auto = ev.crop?.autoQuad; if (!auto) return;
+    ev.crop = { ...ev.crop, decision: 'auto', quad: auto, renderError: undefined };
+    if (ev.crop.detector?.status === undefined && pv) ev.crop.detector = { status: pv.analysis.status, confidence: pv.analysis.confidence };
+    // el recorte que ya se ve (análisis fiable de esas mismas esquinas) es el documento: una pulsación basta
+    if (pv && pv.analysis.cropped && sameQuad(pv.analysis.quad, auto)) Object.assign(ev.crop, { image: pv.image, imageQuad: auto, rot: pv.rot });
     await this.persist();
-    if (decision === 'auto' && (!a || !a.cropped || a.status === 'manual')) { void this.analyzeShot(); return; }
+    if (!materialized(ev)) { void this.materialize(ev); return; }
     this.draw();
   }
 
@@ -298,7 +352,7 @@ export class CaptureFlow {
     const pending = pendingFaces(this.draft);
     if (pending.length) {
       const e = pending[0];
-      toast(`Decida el recorte de: ${pending.map((x) => SHORT[x.kind].toLowerCase()).join(' y ')}. Las fotos siguen protegidas.`, 4000);
+      toast(`Antes de guardar: ${pending.map(pendingText).join(' y ')}. Las fotos siguen protegidas.`, 4000);
       if (this.lastShot?.ev !== e) { this.lastShot = { blob: e.blob, kind: e.kind, ev: e }; this.mode = { sheet: true }; this.draw(); void this.analyzeShot(); }
       document.getElementById('crop-review')?.focus();
       return;
@@ -331,7 +385,7 @@ export class CaptureFlow {
     const up = all.filter((c) => c.sync_status !== 'CONFIRMADO').length;
     this.queuePill.replaceChildren(icon(reading ? 'loader' : up ? 'cloud-up' : 'cloud-ok', 'sm'), reading ? String(reading) : up ? String(up) : '');
     this.queuePill.classList.toggle('busy', reading > 0);
-    this.queuePill.title = reading ? `${reading} procesando documento` : up ? `${up} pendientes de sincronización` : 'Todo confirmado en Google';
+    this.queuePill.title = reading ? `${reading} procesando documento` : up ? `${up} pendientes de sincronización` : SIMULATED_SYNC ? 'Todo sincronizado (simulado)' : 'Todo confirmado en Google';
     this.queuePill.setAttribute('aria-label', `${reading} capturas procesando documento, ${up} pendientes de sincronización. Ver lista`);
   }
 
@@ -378,23 +432,26 @@ export class CaptureFlow {
           h('button', { class: 'btn primary', id: 'btn-system-camera', onClick: () => this.systemCamera() }, icon('camera'), 'Cámara del sistema'),
           h('button', { class: 'btn', onClick: () => this.gallery() }, icon('gallery'), 'Galería')) : null));
     } else if (this.lastShot && this.lastShot.blob.type.startsWith('image/')) {
-      const shot = this.lastShot; const st = this.currentCropState();
+      const shot = this.lastShot; const ev = shot.ev; const st = this.currentCropState();
       const pv = shot.preview && shot.preview !== 'error' ? shot.preview : undefined;
-      // se muestra EXACTAMENTE lo que se procesará: el recorte (automático o ajustado) o la foto completa
-      const showCrop = !!pv && pv.analysis.cropped && (st === 'auto_ok' || st === 'auto_accepted' || st === 'manual');
-      if (showCrop) nodes.push(h('img', { class: 'still crop', src: this.url(pv!.image), alt: `Recorte de ${EVIDENCE_LABELS[shot.kind]}`, id: 'cam-still', 'data-view': 'crop' }));
+      // se muestra EXACTAMENTE lo que se procesará: el recorte generado (aplicado) o, sin decisión, la propuesta
+      const cropImg = (st === 'auto_accepted' || st === 'manual') ? ev?.crop?.image : st === 'auto_ok' && pv?.analysis.cropped ? pv.image : undefined;
+      if (cropImg && !this.viewOriginal) nodes.push(h('img', { class: 'still crop', src: this.url(cropImg), alt: `Recorte de ${EVIDENCE_LABELS[shot.kind]}`, id: 'cam-still', 'data-view': 'crop' }));
       else {
         const img = h('img', { class: 'still', src: this.url(shot.blob), alt: `Foto tomada: ${EVIDENCE_LABELS[shot.kind]}`, id: 'cam-still', 'data-view': 'original' });
         nodes.push(img, this.overlay);
-        const q = shot.ev?.crop?.decision === 'full' ? undefined : shot.ev?.crop?.quad;
-        const src = shot.ev?.crop?.source;
+        const q = ev?.crop?.decision === 'full' ? undefined : ev?.crop?.quad;
+        const src = ev?.crop?.source;
         img.addEventListener('load', () => {
           this.lastHintStatus = '';
-          // contorno propuesto (si lo hay) sobre la foto completa, normalizado a la foto con EXIF aplicado
+          // contorno propuesto o elegido (si lo hay) sobre la foto completa, normalizado a la foto con EXIF aplicado
           this.showHint(q && src ? { status: 'low_confidence', multiple: false, confidence: 0, quad: q.map((p) => ({ x: p.x / src.width, y: p.y / src.height })) } : null, img.naturalWidth, img.naturalHeight);
           this.hintEl.hidden = true;
         }, { once: true });
       }
+      if (st === 'rendering') nodes.push(h('div', { class: 'cam-badge', id: 'crop-working', role: 'status' }, icon('loader', 'sm'), ' Generando recorte…'));
+      if (cropImg) nodes.push(h('button', { class: 'queue-pill view-toggle', id: 'btn-view-toggle', 'aria-pressed': String(this.viewOriginal),
+        onClick: () => { this.viewOriginal = !this.viewOriginal; this.drawViewport(); } }, icon(this.viewOriginal ? 'crop' : 'image', 'sm'), this.viewOriginal ? 'Ver recorte' : 'Ver original'));
     } else {
       nodes.push(h('div', { class: 'cam-msg' }, icon('shield', 'lg'), h('b', null, 'Fotos protegidas en este dispositivo'), h('p', { class: 'small', style: 'color:#d6deea' }, 'Elija cómo continuar.')));
     }
@@ -432,19 +489,36 @@ export class CaptureFlow {
     const dec = ev?.crop?.decision; // solo lo que el operador eligió; ver un recorte no es aprobarlo
     const pending = pendingFaces(d);
     const hasQuad = !!ev?.crop?.autoQuad;
-    const cropReview = st ? h('div', { class: `crop-review${DECIDED.has(st) ? '' : ' pending'}`, id: 'crop-review', tabindex: '-1', role: 'group', 'aria-label': `Recorte de ${ev ? SHORT[ev.kind] : 'la tarjeta'}` },
-      h('p', { class: 'small', id: 'crop-help' }, lbl!.help),
+    const busy = st === 'rendering';
+    const act = (id: string, ic: string, label: string, onClick: () => void, o: { pressed?: boolean; disabled?: boolean; primary?: boolean } = {}) =>
+      h('button', { class: `btn${o.primary ? ' primary' : ''}`, id, 'aria-pressed': o.pressed === undefined ? undefined : String(o.pressed), disabled: this.saving || busy || !!o.disabled, onClick }, icon(ic), label);
+    // acciones de recorte: la principal a todo lo ancho; las alternativas debajo, en dos columnas legibles
+    const main = st === 'render_error'
+      ? act('btn-crop-retry', 'refresh', 'Reintentar recorte', () => { if (ev) void this.materialize(ev); }, { primary: true })
+      : act('btn-crop-auto', 'crop', dec === 'auto' ? 'Recorte automático aplicado' : 'Usar recorte automático', () => this.decideCrop('auto'), { pressed: dec === 'auto', disabled: !hasQuad, primary: st === 'auto_ok' });
+    const cropReview = st && ev ? h('section', { class: `crop-review${DECIDED.has(st) ? ' done' : ' pending'}`, id: 'crop-review', tabindex: '-1', 'aria-labelledby': 'crop-title', 'data-state': st },
+      h('div', { class: 'crop-head' },
+        h('b', { id: 'crop-title' }, `Recorte del ${SHORT[ev.kind].toLowerCase()}`),
+        h('span', { class: 'small muted', id: 'crop-face-count' }, faceCount(d, ev))),
+      h('p', { class: 'small', id: 'crop-help' }, st === 'render_error' && ev.crop?.renderError ? `${lbl!.help} (${ev.crop.renderError})` : lbl!.help),
       h('div', { class: 'crop-actions' },
-        h('button', { class: 'btn', id: 'btn-crop-auto', 'aria-pressed': String(dec === 'auto'), disabled: !hasQuad || this.saving, onClick: () => this.decideCrop('auto') }, icon('crop'), 'Usar recorte automático'),
-        h('button', { class: 'btn', id: 'btn-crop-adjust', 'aria-pressed': String(dec === 'manual'), disabled: this.saving, onClick: () => this.decideCrop('manual') }, icon('edit'), 'Ajustar manualmente'),
-        h('button', { class: 'btn', id: 'btn-crop-full', 'aria-pressed': String(dec === 'full'), disabled: this.saving, onClick: () => this.decideCrop('full') }, icon('image'), 'Conservar foto completa'))) : null;
+        main,
+        h('div', { class: 'crop-alt' },
+          act('btn-crop-adjust', 'edit', dec === 'manual' ? 'Ajustar de nuevo' : 'Ajustar manualmente', () => this.decideCrop('manual'), { pressed: dec === 'manual' }),
+          act('btn-crop-full', 'image', 'Conservar foto completa', () => this.decideCrop('full'), { pressed: dec === 'full' })))) : null;
     const btn = (id: string, ic: string, label: string, onClick: () => void, cls = 'btn') => h('button', { class: cls, id, onClick, disabled: this.saving }, icon(ic), label);
+    const faceTag = (e: DraftEvidence) => {
+      if (!isCardFace(e)) return '';
+      const r = this.renderState(e);
+      return !e.crop?.decision ? 'falta decidir' : e.crop.decision === 'full' ? 'foto completa' : r === 'ok' ? 'recorte aplicado' : r === 'error' ? 'recorte fallido' : 'generando recorte';
+    };
     const strip = h('div', { class: 'mini-strip', 'aria-label': 'Fotos de esta captura' }, ...d.evidences.map((e) =>
-      h('button', { class: 'evidence', 'data-crop': isCardFace(e) ? e.crop?.decision ?? 'pending' : undefined,
-        'aria-label': `${EVIDENCE_LABELS[e.kind]}${isCardFace(e) ? ` · ${e.crop?.decision ? CROP_LABEL[cropState(undefined, e.crop.decision)].text : 'recorte pendiente de decidir'}` : ''}`, 'aria-pressed': String(this.lastShot?.ev === e),
-        onClick: () => { this.lastShot = { blob: e.blob, kind: e.kind, ev: e }; this.draw(); void this.analyzeShot(); } },
-        e.blob.type.startsWith('image/') ? h('img', { src: this.url(e.blob), alt: '' }) : h('span', { class: 'doc' }, 'PDF'),
-        h('span', { class: 'tag' }, SHORT[e.kind]))));
+      h('button', { class: 'evidence', 'data-crop': isCardFace(e) ? e.crop?.decision ?? 'pending' : undefined, 'data-ready': isCardFace(e) ? String(materialized(e)) : undefined,
+        'aria-label': `${EVIDENCE_LABELS[e.kind]}${isCardFace(e) ? ` · ${faceTag(e)}` : ''}`, 'aria-pressed': String(this.lastShot?.ev === e),
+        onClick: () => { this.lastShot = { blob: e.blob, kind: e.kind, ev: e }; this.viewOriginal = false; this.draw(); void this.analyzeShot(); } },
+        e.blob.type.startsWith('image/') ? h('img', { src: this.url(isCardFace(e) && materialized(e) && e.crop?.image ? e.crop.image : e.blob), alt: '' }) : h('span', { class: 'doc' }, 'PDF'),
+        h('span', { class: 'tag' }, SHORT[e.kind]),
+        isCardFace(e) ? h('span', { class: `face-state ${materialized(e) ? 'ok' : 'todo'}`, 'aria-hidden': 'true' }, icon(materialized(e) ? 'check' : 'alert', 'sm')) : null)));
     const quick = (k: keyof QuickFields, label: string, ph: string) => h('div', { class: 'field' }, h('label', { for: `q-${k}` }, label),
       h('input', { id: `q-${k}`, name: k, value: d.quick[k] ?? '', placeholder: ph, autocomplete: 'off', onInput: (e: Event) => { d.quick[k] = (e.target as HTMLInputElement).value; void this.persist(); } }));
 
@@ -454,7 +528,8 @@ export class CaptureFlow {
       cropReview,
       strip,
       pending.length ? h('p', { class: 'small', id: 'crop-pending', role: 'status' }, icon('alert', 'sm'),
-        ` Falta decidir el recorte: ${pending.map((x) => SHORT[x.kind].toLowerCase()).join(' y ')}.`) : null,
+        ` Antes de guardar: ${pending.map(pendingText).join(' y ')}.`)
+        : has('card_front') ? h('p', { class: 'small', id: 'crop-ready', role: 'status' }, icon('check', 'sm'), ' Listo para guardar: cada cara tiene su recorte decidido.') : null,
       has('card_front') ? h('button', { class: 'btn primary lg block', id: 'btn-save-next', disabled: this.saving, 'data-blocked': pending.length ? 'crop' : undefined, 'aria-describedby': pending.length ? 'crop-pending' : undefined, 'aria-busy': this.saving ? 'true' : undefined, onClick: () => this.save(true) },
         icon(this.saving ? 'loader' : 'check'), this.saving ? 'Guardando…' : 'Guardar y siguiente proveedor') : btn('btn-shoot-front', 'card', 'Fotografiar anverso', () => this.target('card_front'), 'btn primary lg block'),
       !has('card_back') && has('card_front') ? btn('btn-back-yes', 'flip', 'Fotografiar reverso', () => this.target('card_back'), 'btn block') : null,
@@ -501,12 +576,21 @@ async function cropForSave(e: DraftEvidence) {
   const c = e.crop;
   if (!isCardFace(e) || !c?.decision) return undefined;
   const quad = c.decision === 'full' ? fullFrame({ source: c.source ?? await imageSize(e.blob) }) : c.quad;
-  return quad ? { decision: c.decision, quad, detector: c.detector } : undefined;
+  if (!quad) return undefined;
+  // el recorte ya generado y visto se guarda como documento procesado (no depende del OCR)
+  const image = c.decision !== 'full' && materialized(e) ? c.image : undefined;
+  return { decision: c.decision, quad, detector: c.detector, ...(image ? { image, rot: c.rot ?? 0 } : {}) };
 }
 
 async function imageSize(b: Blob) {
   const bmp = await createImageBitmap(b, { imageOrientation: 'from-image' } as ImageBitmapOptions);
   try { return { width: bmp.width, height: bmp.height }; } finally { bmp.close(); }
+}
+
+/** «Cara 1 de 2 · 1 lista» — qué cara se revisa y cuántas están resueltas. */
+function faceCount(d: Draft, ev: DraftEvidence) {
+  const faces = d.evidences.filter(isCardFace);
+  return `Cara ${faces.indexOf(ev) + 1} de ${faces.length} · ${faces.filter(materialized).length} lista${faces.filter(materialized).length === 1 ? '' : 's'}`;
 }
 
 const nn = (...xs: (Node | string | null | undefined)[]) => xs.filter((x): x is Node | string => x != null);

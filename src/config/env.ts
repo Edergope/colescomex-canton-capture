@@ -33,6 +33,11 @@ export const config = {
   /** Salvaguarda: ID del archivo de Fase 1, que NUNCA debe usarse como destino. */
   phase1SpreadsheetId: env.VITE_PHASE1_SPREADSHEET_ID as string | undefined,
 };
+/** Instancia de PRUEBAS (vista previa aislada): no se recomienda instalarla ni se presenta como la app oficial. */
+export const IS_PREVIEW = config.instance !== 'production';
+/** Vista previa con Google simulado: ningún dato sale del teléfono; nunca se rotula como «Confirmado en Google». */
+export const SIMULATED_SYNC = IS_PREVIEW && config.syncMode !== 'google';
+
 
 export function configProblems(): string[] {
   const p: string[] = [];
