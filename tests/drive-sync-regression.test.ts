@@ -6,7 +6,7 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { openCaptureDB } from '../src/storage/db';
 import { CaptureRepo } from '../src/storage/repo';
-import { SyncEngine } from '../src/sync/SyncEngine';
+import { SyncEngine, uploadPlan } from '../src/sync/SyncEngine';
 import { GoogleDriveAdapter, GoogleSheetsAdapter } from '../src/adapters/google';
 import { MockAuth } from '../src/adapters/mock';
 import type { DriveAdapter } from '../src/adapters/contracts';
@@ -87,6 +87,21 @@ describe('Drive: destinos correctos y la misma evidencia en dos carpetas', () =>
     for (const e of await repo.evidences(uuid)) {
       if (e.remote_file_id) { expect(row.evidence_files).toContain(e.remote_url); expect(g.files.some((f) => f.id === e.remote_file_id)).toBe(true); }
       if (e.archive_file_id) expect(g.files.some((f) => f.id === e.archive_file_id)).toBe(true);
+    }
+  });
+});
+
+describe('la foto original nunca se publica antes de que el escáner la recorte', () => {
+  it('con decisión de recorte guardada (scan provisional), la carpeta del proveedor ESPERA; el respaldo sí recibe el original', async () => {
+    const { repo } = await setup();
+    const q = [{ x: 5, y: 5 }, { x: 95, y: 6 }, { x: 94, y: 65 }, { x: 6, y: 64 }];
+    for (const decision of ['auto', 'manual', 'full'] as const) {
+      const c = await repo.createCapture(USER, [{ kind: 'card_front', blob: jpeg('front'), crop: { decision, quad: q } }]);
+      const [front] = await repo.evidences(c.uuid);
+      expect(front.scan?.manual_quad).toEqual(q); // existe el scan provisional con las esquinas aprobadas
+      const cap = (await repo.get(c.uuid))!;
+      expect(cap.ocr_status).toBe('CAPTURADO');
+      expect(uploadPlan(cap, [front], { archive: true, scannerEnabled: true }).get(front.id)).toEqual({ main: 'wait', archive: 'upload' });
     }
   });
 });

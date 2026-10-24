@@ -40,7 +40,7 @@ export class WorkerScanner implements DocumentScanner {
 
   async scan(blob: Blob, opts: ScanOptions = {}): Promise<ScanSession> {
     const sid = ++this.seq;
-    const { analysis } = await this.call<{ analysis: ScanAnalysis }>('scan', { blob, manualQuad: opts.manualQuad, detect: opts.detect, maxOutputSide: opts.maxOutputSide, fullSide: opts.fullSide }, sid);
+    const { analysis } = await this.call<{ analysis: ScanAnalysis }>('scan', { blob, manualQuad: opts.manualQuad, approvedQuad: opts.approvedQuad, detect: opts.detect, maxOutputSide: opts.maxOutputSide, fullSide: opts.fullSide }, sid);
     let released = false;
     return {
       analysis,

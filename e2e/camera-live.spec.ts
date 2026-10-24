@@ -1,5 +1,6 @@
 // Cámara en vivo con el dispositivo simulado de Chromium (patrón de prueba, sin imágenes reales).
 import { test, expect, type Page } from '@playwright/test';
+import { resolveCrops } from './support/crop';
 
 type W = { __cx: { app: { repo: { list(): Promise<{ uuid: string }[]>; evidences(u: string): Promise<{ kind: string; role?: string }[]> } } } };
 const captures = (page: Page) => page.evaluate(() => (window as unknown as W).__cx.app.repo.list());
@@ -31,11 +32,13 @@ test('anverso y reverso con el obturador, y captura consecutiva sin esperar al p
   await page.locator('#btn-back-yes').click();
   await page.locator('#btn-shutter').click();
   await expect(page.locator('.cam-sheet h2')).toHaveText('Anverso y reverso listos');
+  await resolveCrops(page, 'full');
   const t0 = Date.now();
   await page.locator('#btn-save-next').click();
   await expect(page.locator('#btn-shutter')).toBeEnabled();
   expect(Date.now() - t0).toBeLessThan(3000);
   await page.locator('#btn-shutter').click();
+  await resolveCrops(page, 'full');
   await page.locator('#btn-save-next').click();
   await expect(page.locator('#saved-toast')).toContainText('Captura protegida en este dispositivo');
   await expect.poll(async () => (await captures(page)).length).toBe(2);

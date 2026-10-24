@@ -46,10 +46,14 @@ export function fullFrame(a: { source: { width: number; height: number } }): Qua
   return [{ x: 0, y: 0 }, { x: w - 1, y: 0 }, { x: w - 1, y: h - 1 }, { x: 0, y: h - 1 }];
 }
 
-export type CropState = 'analyzing' | 'auto_ok' | 'auto_doubtful' | 'not_found' | 'multiple' | 'manual' | 'full' | 'error';
+export type CropState = 'analyzing' | 'auto_ok' | 'auto_doubtful' | 'not_found' | 'multiple' | 'auto_accepted' | 'manual' | 'full' | 'error';
 
-/** Estado que se muestra al operador (nunca «validado» sin una decisión suya). */
+/**
+ * Estado que se muestra al operador. Ver un recorte NO es aprobarlo: sin decisión explícita los estados son
+ * propuestas pendientes; solo «auto_accepted», «manual» y «full» son decisiones del operador.
+ */
 export function cropState(a: ScanAnalysis | undefined, decision?: 'auto' | 'manual' | 'full'): CropState {
+  if (decision === 'auto') return 'auto_accepted';
   if (decision === 'manual') return 'manual';
   if (decision === 'full') return 'full';
   if (!a) return 'analyzing';
@@ -59,13 +63,17 @@ export function cropState(a: ScanAnalysis | undefined, decision?: 'auto' | 'manu
   return 'not_found';
 }
 
+/** Estados que ya son una decisión del operador (la cara puede guardarse). */
+export const DECIDED: ReadonlySet<CropState> = new Set(['auto_accepted', 'manual', 'full']);
+
 export const CROP_LABEL: Record<CropState, { tone: 'ok' | 'warn' | 'info' | 'err' | 'neutral'; text: string; help: string }> = {
-  analyzing: { tone: 'info', text: 'Analizando bordes…', help: 'La foto ya está protegida en el teléfono.' },
-  auto_ok: { tone: 'ok', text: 'Recorte automático — revíselo', help: 'Los bordes se detectaron con confianza. Compruebe que no falta texto.' },
-  auto_doubtful: { tone: 'warn', text: 'Bordes dudosos', help: 'El recorte sugerido podría estar mal. Ajústelo o conserve la foto completa.' },
-  not_found: { tone: 'warn', text: 'No se encontraron los bordes', help: 'Se conservará la foto completa. Puede ajustar las esquinas a mano.' },
-  multiple: { tone: 'warn', text: 'Hay varias tarjetas en la foto', help: 'Ajuste las esquinas de la tarjeta correcta o repita la foto.' },
+  analyzing: { tone: 'info', text: 'Analizando bordes…', help: 'La foto ya está protegida en el teléfono. Si no quiere esperar, conserve la foto completa o ajuste las esquinas.' },
+  auto_ok: { tone: 'info', text: 'Recorte propuesto — decida', help: 'Compruebe que no falta texto y pulse «Usar recorte automático», o elija otra opción.' },
+  auto_doubtful: { tone: 'warn', text: 'Bordes dudosos — decida', help: 'El recorte sugerido podría estar mal. Ajústelo, úselo igualmente o conserve la foto completa.' },
+  not_found: { tone: 'warn', text: 'No se encontraron los bordes', help: 'Conserve la foto completa o ajuste las esquinas a mano.' },
+  multiple: { tone: 'warn', text: 'Hay varias tarjetas en la foto', help: 'Ajuste las esquinas de la tarjeta correcta, conserve la foto completa o repita la foto.' },
+  auto_accepted: { tone: 'ok', text: 'Recorte automático aceptado', help: 'Se procesará exactamente este recorte.' },
   manual: { tone: 'ok', text: 'Esquinas ajustadas por usted', help: 'Se procesará exactamente este recorte.' },
   full: { tone: 'neutral', text: 'Foto completa', help: 'No se recortará: se leerá la foto entera.' },
-  error: { tone: 'err', text: 'El escáner no respondió', help: 'Se conservará la foto completa. Puede repetir la foto o ajustar las esquinas.' },
+  error: { tone: 'err', text: 'El escáner no respondió', help: 'Conserve la foto completa, ajuste las esquinas a mano o repita la foto.' },
 };

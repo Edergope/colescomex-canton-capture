@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
+import { resolveCrops } from './support/crop';
 
 const FX = path.resolve('ocr-eval/fixtures');
 const fx = (n: string) => path.join(FX, n);
@@ -34,6 +35,7 @@ test('A/B/C consecutivas con OCR real (PaddleOCR) en segundo plano, fusión y si
   await shoot(page, null, fx('c1_front_photo.jpg'));
   await shoot(page, '#btn-back-yes', fx('c1_back_photo.jpg'));
   await shoot(page, '#btn-add-stand', fx('c2_back_scan.png'));
+  await resolveCrops(page);
   const t0 = Date.now();
   await page.locator('#btn-save-next').click();
   await expect(page.locator('#btn-gallery')).toBeVisible(); // cámara lista para el siguiente proveedor de inmediato
@@ -42,6 +44,7 @@ test('A/B/C consecutivas con OCR real (PaddleOCR) en segundo plano, fusión y si
 
   // B: solo frontal (mientras A está en OCR)
   await shoot(page, null, fx('c2_front_photo.jpg'));
+  await resolveCrops(page);
   await page.locator('#btn-save-next').click();
   await expect(page.locator('#btn-gallery')).toBeVisible();
   const during = await captures(page);
@@ -50,6 +53,7 @@ test('A/B/C consecutivas con OCR real (PaddleOCR) en segundo plano, fusión y si
   // C: frontal + producto
   await shoot(page, null, fx('c3_front_photo.jpg'));
   await shoot(page, '#btn-add-product', fx('c4_back_scan.png'));
+  await resolveCrops(page);
   await page.locator('#btn-save-done').click();
   await expect(page.locator('#btn-register')).toBeVisible();
   expect(saveMs).toBeLessThan(3000);
@@ -94,6 +98,7 @@ test('corrección humana se conserva tras reprocesar OCR', async ({ page }) => {
   await login(page);
   await page.locator('#btn-register').click();
   await shoot(page, null, fx('c6_front_photo.jpg'));
+  await resolveCrops(page);
   await page.locator('#btn-save-done').click();
   await expect.poll(async () => (await captures(page))[0]?.ocr_status, { timeout: 180_000 }).toMatch(/EXTRAIDO|REQUIERE_REVISION/);
   const [c] = await captures(page);
@@ -119,6 +124,7 @@ test('borrador del asistente sobrevive a que Android cierre la página al abrir 
   await page.reload(); // la pestaña se recarga como si Android la hubiera descartado
   await expect(page.getByText('Se recuperó una captura sin guardar')).toBeVisible();
   await expect(page.locator('#cam-still')).toBeVisible(); // la foto recuperada se muestra
+  await resolveCrops(page, 'full');
   await page.locator('#btn-save-done').click();
   await expect.poll(async () => (await captures(page)).length).toBe(1);
   expect((await evidences(page, (await captures(page))[0].uuid))[0].size).toBeGreaterThan(100_000);
@@ -143,6 +149,7 @@ test('sin conexión: la app reabre desde caché, captura y sincroniza al volver 
   await expect(page.locator('.net-pill')).toContainText('Sin conexión');
   await page.locator('#btn-register').click();
   await shoot(page, null, fx('c4_front_photo.jpg'));
+  await resolveCrops(page);
   await page.locator('#btn-save-done').click();
   // OCR también sin conexión (modelos desde la caché del service worker)
   await expect.poll(async () => (await captures(page))[0]?.ocr_status, { timeout: 180_000 }).toMatch(/EXTRAIDO|REQUIERE_REVISION/);
@@ -165,9 +172,9 @@ test('sin conexión: la app reabre desde caché, captura y sincroniza al volver 
 // ───────────── Smart Document Scanner con tarjetas REALES (fixtures privados; se omite sin ellos) ─────────────
 import { privateCases, privateDir, PRIVATE_SKIP_MSG } from '../scripts/private-dir.mjs';
 const REAL_CASES = privateCases() ?? [];
-type Ev = { id: string; kind: string; role?: string; derived_from?: string; superseded_by?: string; size: number; file_name: string; sha256?: string; scan?: { status: string; rotation: number; cropped: boolean; orientation_source: string } };
+type Ev = { id: string; kind: string; role?: string; derived_from?: string; superseded_by?: string; size: number; file_name: string; sha256?: string; crop?: { decision: string; detector?: { status: string } }; scan?: { status: string; rotation: number; cropped: boolean; orientation_source: string } };
 const allEvidences = (page: Page, uuid: string) => page.evaluate(async (u) => (await (window as never as { __cx: { app: { repo: { evidences(u: string): Promise<Ev[]> } } } }).__cx.app.repo.evidences(u))
-  .map((e) => ({ id: e.id, kind: e.kind, role: e.role, derived_from: e.derived_from, superseded_by: e.superseded_by, size: e.size, file_name: e.file_name, sha256: e.sha256, scan: e.scan && { status: e.scan.status, rotation: e.scan.rotation, cropped: e.scan.cropped, orientation_source: e.scan.orientation_source } })), uuid);
+  .map((e) => ({ id: e.id, kind: e.kind, role: e.role, derived_from: e.derived_from, superseded_by: e.superseded_by, size: e.size, file_name: e.file_name, sha256: e.sha256, crop: e.crop && { decision: e.crop.decision, detector: e.crop.detector && { status: e.crop.detector.status } }, scan: e.scan && { status: e.scan.status, rotation: e.scan.rotation, cropped: e.scan.cropped, orientation_source: e.scan.orientation_source } })), uuid);
 
 test.describe('tarjetas reales (privadas)', () => {
   test.skip(REAL_CASES.length === 0, PRIVATE_SKIP_MSG);
@@ -178,11 +185,13 @@ test.describe('tarjetas reales (privadas)', () => {
       await page.locator('#btn-register').click();
       await shoot(page, null, path.join(privateDir(), rc.sides.front.file));
       await shoot(page, '#btn-back-yes', path.join(privateDir(), rc.sides.back.file));
+      await resolveCrops(page, 'auto'); // el operador acepta el recorte automático que ve
       const t0 = Date.now();
       await page.locator('#btn-save-next').click();
       await expect(page.locator('#btn-gallery')).toBeVisible(); // J: la siguiente captura no espera al escáner ni al OCR
       const saveMs = Date.now() - t0;
       await shoot(page, null, fx('c2_front_photo.jpg'));
+      await resolveCrops(page, 'full');
       await page.locator('#btn-save-done').click();
       expect(saveMs).toBeLessThan(3000);
 
@@ -205,8 +214,11 @@ test.describe('tarjetas reales (privadas)', () => {
       const evs = await allEvidences(page, M.uuid);
       const origF = evs.find((e) => e.kind === 'card_front' && e.role === 'original')!;
       const origB = evs.find((e) => e.kind === 'card_back' && e.role === 'original')!;
-      expect(origF.scan).toMatchObject({ status: 'ok', cropped: true, rotation: rc.sides.front.rot * 90, orientation_source: 'classifier' });
-      expect(origB.scan).toMatchObject({ status: 'ok', cropped: true, rotation: rc.sides.back.rot * 90, orientation_source: 'classifier' });
+      // el detector lo propuso con confianza y el operador lo aceptó: se procesa exactamente ese recorte
+      expect(origF.crop).toMatchObject({ decision: 'auto', detector: { status: 'ok' } });
+      expect(origB.crop).toMatchObject({ decision: 'auto', detector: { status: 'ok' } });
+      expect(origF.scan).toMatchObject({ status: 'manual', cropped: true, rotation: rc.sides.front.rot * 90, orientation_source: 'classifier' });
+      expect(origB.scan).toMatchObject({ status: 'manual', cropped: true, rotation: rc.sides.back.rot * 90, orientation_source: 'classifier' });
       expect(origF.sha256).toBe(rc.sides.front.sha256);
       expect(origB.sha256).toBe(rc.sides.back.sha256);
       const procF = evs.find((e) => e.role === 'processed' && e.derived_from === origF.id)!;
@@ -234,8 +246,7 @@ test.describe('tarjetas reales (privadas)', () => {
 
       await page.locator('[data-nav="list"]').click();
       await page.locator(`[data-ref="${M.external_ref}"]`).click();
-      // guardado sin elegir antes de terminar el análisis: recorte automático, marcado como NO revisado por una persona
-      await expect(page.locator('[data-scan="card_front:ok"]')).toContainText(/Recorte automático/);
+      await expect(page.locator('[data-scan^="card_front:"]')).toContainText('Recorte automático aceptado por usted');
       await expect(page.locator('[data-kv="qq"]')).toContainText(X.extras.qq[0]);
       await page.screenshot({ path: path.join(privateDir(), 'reports', `e2e-detalle-${rc.id}.png`), fullPage: true });
     });

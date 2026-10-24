@@ -6,7 +6,7 @@ import { detectDocument } from './detect';
 import { rectifiedSize, warpPerspective, type Quad } from './homography';
 import { downscale, rotate90, type RGBAImage } from './imageops';
 import { classifyOrientation } from './classifier';
-import { CROP_STATUSES, MAX_OUTPUT_SIDE, type ScanAnalysis, type ScanStatus } from './types';
+import { APPROVED_TOL, CROP_STATUSES, MAX_OUTPUT_SIDE, type ScanAnalysis, type ScanStatus } from './types';
 import { DETECT_WORK_SIDE, FINE_SIDE } from './detect';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -61,7 +61,15 @@ self.onmessage = async (e: MessageEvent) => {
       const tDecode = performance.now();
       let status: ScanStatus, quad: Quad | undefined, confidence = 1, method: string | undefined, multiple = false, reasons: string[] = [];
       if (e.data.manualQuad) { status = 'manual'; quad = (e.data.manualQuad as Quad).map((p) => ({ x: p.x / k, y: p.y / k })) as Quad; method = 'manual'; }
-      else {
+      else if (e.data.approvedQuad) {
+        // recorte automático aprobado: se procesa ESE recorte; la detección a resolución completa solo lo afina si coincide
+        const hint = (e.data.approvedQuad as Quad).map((p) => ({ x: p.x / k, y: p.y / k })) as Quad;
+        const r = detectDocument(full, { work, fine }, e.data.detect ?? {});
+        const diag = Math.hypot(hint[2].x - hint[0].x, hint[2].y - hint[0].y);
+        const same = !!r.quad && r.quad.every((p, i) => Math.hypot(p.x - hint[i].x, p.y - hint[i].y) <= APPROVED_TOL * diag);
+        status = 'manual'; quad = same ? r.quad : hint; method = same ? 'approved_refined' : 'approved';
+        reasons = [same ? 'Recorte aprobado, afinado a resolución completa' : 'Recorte aprobado por el operador'];
+      } else {
         const r = detectDocument(full, { work, fine }, e.data.detect ?? {});
         status = r.status; quad = r.quad; confidence = r.confidence; method = r.method; multiple = r.multiple; reasons = r.reasons;
       }

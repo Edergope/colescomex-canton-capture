@@ -1,7 +1,8 @@
 # Smart Document Scanner — corrección prioritaria (v1.2.2)
 
 - **Rama:** `fix/scanner-quality`, creada desde la producción v1.2.1 (`580ea95`).
-- **Estado:** lista para revisión. **No publicada.** No se tocó `main` ni `gh-pages`, y no hubo despliegue.
+- **Estado:** lista para revisión. **No publicada en producción.** No se tocó `main` ni `gh-pages`.
+- **Revisión del propietario (`f16611d`):** el guardado aceptaba en silencio un recorte con estado `ok` y podía adelantarse al análisis. Corregido: decisión explícita por cara (§2.1).
 - **Datos:**
   - no hay tarjetas reales ni datos personales en el repositorio;
   - todas las escenas de prueba son sintéticas;
@@ -57,34 +58,41 @@ Se revisó todo el recorrido: cámara → foto → worker → detección → per
 
 ### Experiencia de captura (`capture.ts`, `scan-preview.ts`, `corners.ts`, `document.ts`, `detail.ts`)
 
-**Flujo profesional:** capturar → proteger el original → detectar → **mostrar el recorte real** → aprobar o ajustar → OCR.
+**Flujo profesional:** capturar → proteger el original → detectar → **mostrar el recorte real** → **decisión explícita del operador** → OCR de exactamente lo aprobado.
 
-- **Protección inmediata.** El original se guarda en IndexedDB nada más tomar la foto («Captura protegida…»).
-- **Vista previa real.** Usa el mismo worker, el mismo detector y la misma perspectiva que el proceso final (`fullSide` 2000). Lo que se aprueba es lo que se procesa: las esquinas aprobadas viajan como `manual_quad`.
-- **Panel de revisión** con tres opciones:
-  - **Usar recorte automático** (desactivado si no hay propuesta);
-  - **Ajustar manualmente**;
-  - **Conservar fotografía completa**.
-- **Ver antes de decidir.** Se puede alternar entre el recorte y el original con la propuesta superpuesta.
-- **Editor de 4 esquinas:**
-  - arrastre táctil;
-  - **lupa ×3** con retícula, en el lado opuesto al dedo;
-  - control por teclado (accesible);
-  - botones «Aplicar», «Foto completa» y «Volver a automático».
-- **Estados de confianza claros:**
-  - «Recorte automático — revíselo»;
-  - «Bordes dudosos»;
-  - «No se encontraron los bordes»;
-  - «Hay varias tarjetas en la foto»;
-  - «Esquinas ajustadas por usted»;
-  - «Foto completa»;
-  - «El escáner no respondió».
+- **Protección inmediata.** El original se guarda en IndexedDB nada más tomar la foto, antes de cualquier análisis.
+- **Vista previa real.** Usa el mismo worker, el mismo detector y la misma perspectiva que el proceso final, a 2000 px.
+- **Panel de decisión** por cara de la tarjeta:
+  - **Usar recorte automático:** una sola pulsación acepta el recorte visible. Desactivado si no hay propuesta.
+  - **Ajustar manualmente:** editor de 4 esquinas con **lupa ×3**, arrastre táctil y teclado.
+  - **Conservar fotografía completa.**
+- **Estados:**
+  - mientras no hay decisión, son propuestas: «Recorte propuesto — decida», «Bordes dudosos — decida», «No se encontraron los bordes», «Hay varias tarjetas en la foto», «El escáner no respondió»;
+  - solo una decisión del operador produce «Recorte automático aceptado», «Esquinas ajustadas por usted» o «Foto completa».
+- **La pista en vivo** pasa de «Tarjeta detectada» a «**Bordes visibles**».
+- **Nunca se inventan esquinas.** Si el detector duda o no encuentra bordes, no se propone recorte.
+- **Repetir la foto** sustituye solo esa cara; el resto del borrador se conserva.
+- **Decisión trazable:** `Evidence.crop` guarda la decisión, la fecha, el autor y el estado del detector, y queda en la auditoría.
+- **Capturas guardadas:** desde el documento se puede ajustar el recorte o conservar la foto completa, caso por caso.
 
-  Ningún estado dice «validado» sin una decisión del operador. La pista en vivo pasa de «Tarjeta detectada» a «**Bordes visibles**».
-- **Si el detector duda o no encuentra bordes:** no se propone recorte y por defecto se conserva la **foto completa**. Nunca se inventan esquinas.
-- **Repetir la foto** sustituye solo esa cara. El resto del borrador se conserva.
-- **Decisión trazable.** Se guarda en la evidencia (`Evidence.crop`: decisión, fecha, autor y estado del detector) y queda en la auditoría.
-- **Capturas guardadas.** Desde el documento se puede ajustar el recorte, volver a automático o conservar la foto completa, caso por caso.
+#### 2.1 Corrección tras la revisión del propietario: ningún recorte se acepta en silencio
+
+| Requisito | Implementación |
+|---|---|
+| 1. Decisión explícita por cara | «Guardar y siguiente» y «Guardar y salir» no guardan si alguna cara carece de decisión. Muestran «Falta decidir el recorte: …», llevan a esa cara y resaltan el panel. Antes, `cropForSave()` convertía un `ok` en `auto`; ahora solo guarda la decisión elegida. |
+| 2. Ver no es aprobar | Ningún botón aparece pulsado sin una pulsación del operador. El recorte visible se rotula «Recorte propuesto — decida». |
+| 3. Análisis en curso | El original ya está en IndexedDB, pero no se puede terminar la captura sin decidir. Si el análisis termina después, tampoco acepta nada por sí solo. Y si el operador decide durante el análisis (p. ej. foto completa), el resultado posterior no pisa esa decisión. |
+| 4. Fallo del escáner | «Conservar foto completa» y «Ajustar manualmente» están disponibles **desde el primer instante**, sin esperar al análisis. Si el escáner no responde en 20 s, aparece «El escáner no respondió». El tamaño para la foto completa se lee de la propia foto, sin escáner. |
+| 5. Rapidez | Aceptar el recorte visible es **una pulsación**. La foto completa no espera al análisis. |
+| 6. Anverso y reverso | Cada cara se decide por separado. La tira de miniaturas marca las pendientes, y al guardar se lleva al operador a la primera que falte. |
+| 7. Procesar lo aprobado | «Manual» y «foto completa» se procesan con esas esquinas exactas. «Auto» se procesa con el recorte aprobado; solo se sustituye por la detección a resolución completa si coincide con él (esquinas a ≤ 0,6 % de la diagonal). Así se conserva la precisión del OCR sin cambiar lo aprobado; si no coinciden, se usa exactamente lo aprobado. |
+| 8. Registros anteriores | Sin reproceso ni modificación automática. Los borradores anteriores sin decisión piden una decisión al guardarse; nunca se supone. |
+
+**Defecto de sincronización encontrado durante esta corrección** (`src/sync/SyncEngine.ts`; ya existía en `f16611d`):
+- Al guardar una decisión de recorte se crea un registro de escaneo provisional con las esquinas aprobadas.
+- La sincronización lo tomaba por «ya escaneada» y podía subir la **foto original** (con dedos y fondo) a la carpeta del proveedor antes de que existiera el recorte.
+- Ahora espera al resultado real del escáner.
+- Prueba de regresión: `tests/drive-sync-regression.test.ts`, que falla sin la corrección.
 
 ### Extracción (`src/extract/entities.ts`)
 
@@ -198,64 +206,69 @@ Se revisó todo el recorrido: cámara → foto → worker → detección → per
 
 ## 5. Pruebas ejecutadas (emulación Android: Chromium, Pixel 7)
 
-Verificación final del 23-10-2026 en `fix/scanner-quality`:
+Verificación final en `fix/scanner-quality` (ver el commit de la corrección):
 
 | Control | Resultado |
 |---|---|
 | TypeScript (`tsc --noEmit`) | ✅ 0 errores |
-| Unitarias (`vitest`) | ✅ **158/158** · 0 fallidas · 0 omitidas |
+| Unitarias (`vitest`) | ✅ **160/160** en 16 archivos · 0 fallidas · 0 omitidas |
 | Build de producción | ✅ |
-| `check:dist` | ✅ 27 entradas de precaché verificadas |
-| E2E Playwright | ✅ **33/33** · 0 fallidas · 0 omitidas |
+| `check:dist` | ✅ 27 entradas de precaché · 16 archivos OCR (71,6 MB) idénticos al origen |
+| E2E Playwright | ✅ **37/37** · 0 fallidas · 0 omitidas |
 | `check:private` | ✅ 17 patrones, 0 coincidencias |
 
-Pruebas nuevas en `e2e/scanner-review.spec.ts`:
-1. protección inmediata más vista previa del recorte real;
-2. conservar la foto completa;
-3. ajuste manual con lupa;
-4. foto sin bordes: no hay propuesta y por defecto se conserva la foto completa;
-5. repetir la foto conserva el borrador.
+**Pruebas E2E de la decisión de recorte** (`e2e/scanner-review.spec.ts`, 9 casos):
+1. **Confianza alta:** el recorte se ve pero ningún botón está pulsado. «Guardar y salir» y «Guardar y siguiente» **no guardan** (0 capturas). Una pulsación en «Usar recorte automático» lo acepta, y se guarda `auto` con las esquinas aprobadas.
+2. **Confianza baja** (tarjeta que toca el borde): «Bordes dudosos — decida». Guardar sin decidir no guarda. El operador elige la foto completa, y se guarda `full` con el diagnóstico `low_confidence`.
+3. **El guardado no se adelanta al análisis.** El escáner se ralentiza a 6 s para garantizar la comprobación durante el análisis. Con «Analizando bordes…» ya visible:
+   - el original está en IndexedDB;
+   - «Usar recorte automático» está desactivado; «Conservar foto completa» y «Ajustar» están activos;
+   - guardar no guarda.
 
-También siguen pasando:
-- `pwa-update.spec.ts`: actualización desde v1.0.0 y v1.2.0, con capturas en curso y ediciones sin guardar;
-- la prueba estricta de precisión del detector sobre R1 (`tests/scanner-detect.test.ts`).
+   Al terminar el análisis tampoco se acepta nada solo. Una decisión tomada durante el análisis no la pisa el resultado.
+4. **Escáner colgado** (no responde): no bloquea. Aparece «El escáner no respondió», y la foto completa se guarda con el tamaño leído de la foto.
+5. **Anverso y reverso:** con solo el reverso decidido, no se guarda. La app lleva al anverso pendiente, y se guardan `manual` y `auto` por separado.
+6–9. Foto completa, ajuste con lupa, foto sin bordes (sin propuesta; el operador elige) y repetir foto sin perder el borrador.
+
+**Unitarias nuevas:**
+- `auto` viaja al escáner como recorte aprobado; `manual` y `full` viajan como esquinas exactas, y lo aprobado queda registrado (`tests/scanner-pipeline.test.ts`);
+- regresión de sincronización (§2.1).
+
+**El resto de E2E** usan el ayudante `e2e/support/crop.ts`, que decide como lo haría un operador. Incluye:
+- tarjetas reales privadas R1, con recorte aceptado y extracción comercial exacta;
+- actualización desde v1.0.0: el borrador antiguo sin decisión la pide.
 
 ---
 
 ## 6. Plan de aceptación en Android físico (solo el propietario puede darlo por completado)
 
-Con la app de prueba, nunca la de producción mientras no se autorice la publicación:
+**Dónde:** `https://colescomex-capture-preview.web.app`, la vista previa de pruebas que ya existía. Se abre **solo en Chrome**, sin instalar la app.
 
-1. **Tarjeta blanca sobre mesa clara**
-   - Esperado: «Recorte automático — revíselo».
-   - El recorte no corta texto.
-   - «Usar recorte automático» → el OCR lee la tarjeta.
-2. **Tarjeta oscura o negra sobre mesa**
-   - Esperado: recorte correcto, o «Bordes dudosos» con propuesta.
-   - Nunca un recorte dentro del logotipo.
-3. **Tarjeta metálica o con reflejo**
-   - Esperado: «Bordes dudosos» o «No se encontraron los bordes».
-   - Con «Ajustar manualmente» y la lupa se colocan las 4 esquinas, y el OCR procesa exactamente ese recorte.
-4. **Tarjeta sujeta con los dedos**
-   - El recorte no incluye los dedos, o pide revisión.
-5. **Dos tarjetas en la foto**
-   - Debe aparecer «Hay varias tarjetas en la foto».
-6. **Tarjeta vertical y foto en perspectiva**
-   - Recorte correcto y texto derecho.
-7. **Repetir la foto del reverso**
-   - El anverso y los datos del borrador siguen ahí.
-8. **Conservar foto completa**
-   - La ficha muestra «Foto completa (sin recorte)».
-9. **Captura guardada → Documento → Ajustar recorte**
-   - Cambia solo esa captura.
-   - Los campos corregidos a mano se conservan.
-10. **Tiempo**
-    - Desde el disparo hasta ver el recorte: anotar los segundos en un teléfono de gama media.
+**Por qué es segura:**
+- tiene origen propio, distinto de la app de producción (`edergope.github.io`), así que no ve ni modifica sus capturas;
+- usa la base de datos aislada `colescomex-canton-capture--preview`;
+- muestra la franja «VISTA PREVIA · preview · datos aislados»;
+- el acceso y la sincronización son **simulados**: nada sale del teléfono y no se escribe en Drive ni en Sheets. Si aparece «Confirmado en Google», es una simulación.
+
+**Antes de empezar:** en Ajustes → Versión debe verse **1.2.2**, con la compilación del commit entregado. Si la pestaña ya estaba abierta, ciérrala y vuelve a abrir la dirección.
+
+| # | Prueba | Esperado |
+|---|---|---|
+| 1 | **Tarjeta blanca** sobre mesa | «Recorte propuesto — decida». Guardar sin decidir **no guarda** y muestra «Falta decidir el recorte». Una pulsación en «Usar recorte automático» lo acepta y guarda. El texto no queda cortado. |
+| 2 | **Tarjeta oscura o negra** | Recorte propuesto correcto, o «Bordes dudosos — decida». Nunca un recorte dentro del logotipo. |
+| 3 | **Tarjeta con reflejos** | «Bordes dudosos» o «No se encontraron los bordes». Probar **Ajustar manualmente**: arrastrar las 4 esquinas con la lupa. Valorar si es fácil colocar cada esquina con el dedo. |
+| 4 | Anverso y reverso | Decidir solo una cara y pulsar guardar: la app lleva a la cara pendiente. |
+| 5 | Guardar en cuanto aparece «Analizando bordes…» | No guarda. «Conservar foto completa» funciona de inmediato. |
+| 6 | Captura guardada → Documento | El recorte coincide con el aprobado. La ficha indica la decisión («Recorte automático aceptado por usted», «Esquinas ajustadas por usted» o «Foto completa»). |
+| 7 | Tiempo | Segundos desde el disparo hasta ver el recorte, en tu teléfono. |
+
+Anota, por cada tarjeta, el estado mostrado, la decisión tomada y si el recorte final era correcto. Si algo falla, una captura de pantalla de la vista previa (es de prueba, sin datos de producción).
 
 ---
 
 ## 7. Sin pérdida de datos
 
+- **Sincronización:** la foto original ya no puede publicarse en la carpeta del proveedor antes de recortarse (§2.1).
 - **Base de datos sin cambios.** Base `colescomex-canton-capture`, esquema 1, sin migración. Los campos nuevos (`Evidence.crop`) son **opcionales**: las capturas anteriores se leen igual y muestran «Recorte automático · sin revisar».
 - **Original intacto.** Se guarda antes de cualquier proceso, y el editor de esquinas trabaja sobre él sin modificarlo.
 - **Sin reproceso masivo.** No hay reproceso automático de capturas históricas, ni sustitución de archivos en Drive, ni escrituras en Sheets de producción. El ajuste de recorte es individual, a petición del operador, y conserva los campos bloqueados por corrección humana.

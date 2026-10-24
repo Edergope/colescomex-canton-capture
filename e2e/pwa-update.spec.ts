@@ -5,6 +5,7 @@
 // y esta rama compilada dos veces (B1, B2) para probar las actualizaciones siguientes.
 // Datos 100 % ficticios. Las versiones de producción no pueden acceder a Google: todo lo externo se bloquea.
 import { test, expect as baseExpect, type Page, type BrowserContext } from '@playwright/test';
+import { resolveCrops } from './support/crop';
 import { execSync } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -216,10 +217,12 @@ test('v1.0.0 instalada (la del teléfono) → versión nueva: se actualiza sola 
 
   // la numeración continúa (sin referencias duplicadas) y la captura nueva pasa por escáner + OCR del precaché nuevo
   await page.locator('#nav-capture').click();
+  await resolveCrops(page, 'full'); // el borrador de la v1.0 no traía decisión de recorte: se pide, nunca se supone
   await page.locator('#btn-save-next').click(); // el borrador de la v1.0 se guarda como captura 0003
   const chooser = page.waitForEvent('filechooser');
   await page.locator('#btn-gallery').click();
   await (await chooser).setFiles(FIXTURE);
+  await resolveCrops(page, 'proposal');
   await page.locator('#btn-save-done').click();
   type W = { __cx: { app: { repo: { list(): Promise<{ external_ref: string; ocr_status: string; uuid: string; sync_status: string }[]>; evidences(u: string): Promise<{ role?: string }[]> } } } };
   const latest = () => page.evaluate(async () => (await (window as unknown as W).__cx.app.repo.list())[0]);
@@ -261,7 +264,8 @@ test('actualizaciones siguientes: nunca recarga durante una captura; se aplica a
   expect(await page.evaluate(() => (window as unknown as { __m?: number }).__m)).toBe(marker); // NO se recargó
   await expect(page.locator('#btn-save-next')).toBeVisible();
 
-  // el operador guarda y sale: la actualización se aplica sola en un momento seguro
+  // el operador decide el recorte, guarda y sale: la actualización se aplica sola en un momento seguro
+  await resolveCrops(page, 'full');
   await page.locator('#btn-save-done').click();
   // espera a que termine el OCR de la captura guardada (recargar durante el OCR se tomaría por un cierre por memoria)
   await expect.poll(() => safeEval(page, () => (window as unknown as { __m?: number }).__m ?? 'recargada'), { timeout: 300_000 }).toBe('recargada');

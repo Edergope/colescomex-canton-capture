@@ -30,8 +30,17 @@ export interface ScanSession {
   release(): void;
 }
 
+/** Tolerancia (fracción de la diagonal del documento) para refinar un recorte aprobado. */
+export const APPROVED_TOL = 0.006;
+
 export interface ScanOptions {
   manualQuad?: Quad;
+  /**
+   * Recorte automático APROBADO por el operador (visto en la vista previa, a menor resolución). Se procesa ese
+   * recorte; solo se sustituye por la detección a resolución completa si coincide con él (mismo contorno, esquinas
+   * a ≤ APPROVED_TOL de la diagonal), para ganar precisión sin cambiar lo aprobado.
+   */
+  approvedQuad?: Quad;
   /** geometría esperada (perfil de documento) */
   detect?: { aspectRange?: [number, number]; minAreaFrac?: number };
   /** lado mayor del documento rectificado */

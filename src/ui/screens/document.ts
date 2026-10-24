@@ -35,7 +35,7 @@ export async function documentScreen(ctx: Ctx, route: Extract<Route, { name: 'do
 
   const sc = original.scan;
   const state = !isCard ? null
-    : processed ? notice(original.crop ? 'ok' : 'warn', 'crop', original.crop?.decision === 'full' ? 'Foto completa (enderezada), sin recorte' : original.crop?.decision === 'manual' ? 'Recortado con sus esquinas' : original.crop?.decision === 'auto' ? 'Recorte automático visto y guardado por usted' : 'Recorte automático · sin revisar: compruebe que no falta texto',
+    : processed ? notice(original.crop ? 'ok' : 'warn', 'crop', original.crop?.decision === 'full' ? 'Foto completa (enderezada), sin recorte' : original.crop?.decision === 'manual' ? 'Recortado con sus esquinas' : original.crop?.decision === 'auto' ? 'Recorte automático aceptado por usted' : 'Recorte automático · sin revisar: compruebe que no falta texto',
         h('p', null, `${sc?.rotation ? `Texto girado ${sc.rotation}°. ` : ''}${sc?.output_size ? `${sc.output_size.width}×${sc.output_size.height} px. ` : ''}El original se conserva intacto.`), undefined, 'scan-state')
     : working ? notice('info', 'loader', 'Procesando documento', h('p', null, 'El recorte todavía no existe; se mostrará aquí cuando el escáner termine. Puede seguir capturando.'), undefined, 'scan-state')
     : sc ? notice('warn', 'alert', sc.multiple ? 'Hay varias tarjetas en la foto' : 'No se detectaron los bordes con confianza',
@@ -46,7 +46,8 @@ export async function documentScreen(ctx: Ctx, route: Extract<Route, { name: 'do
     ctx.setDirty(true);
     void openCornerEditor({ blob: original.blob, quad: original.scan?.manual_quad ?? original.scan?.quad }, {
       onSave: async (q) => { await ctx.app.setManualCorners(original.id, q, 'manual'); toast('Esquinas guardadas · se vuelve a leer la tarjeta (sus correcciones se conservan)'); },
-      onAuto: original.scan?.manual_quad ? async () => { await ctx.app.setManualCorners(original.id, undefined); toast('Se volverá a detectar automáticamente'); } : undefined,
+      // «volver a automático» solo deshace una decisión manual o de foto completa (no un recorte automático aceptado)
+      onAuto: original.scan?.manual_quad && original.crop?.decision !== 'auto' ? async () => { await ctx.app.setManualCorners(original.id, undefined); toast('Se volverá a detectar automáticamente'); } : undefined,
       onFull: async () => {
         const bmp = await createImageBitmap(original.blob); const q = [{ x: 0, y: 0 }, { x: bmp.width - 1, y: 0 }, { x: bmp.width - 1, y: bmp.height - 1 }, { x: 0, y: bmp.height - 1 }]; bmp.close();
         await ctx.app.setManualCorners(original.id, q, 'full'); toast('Se usará la foto completa · se vuelve a leer la tarjeta');

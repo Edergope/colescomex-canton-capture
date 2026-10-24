@@ -22,11 +22,11 @@ const photo = (spec: Spec) => new Blob([`\xFF\xD8MOCKCARD\n${JSON.stringify(spec
 const other = (kind: EvidenceKind) => ({ kind, blob: new Blob([`\xFF\xD8 foto ${kind}`], { type: 'image/jpeg' }) });
 
 class FakeScanner implements DocumentScanner {
-  calls: { manualQuad?: unknown }[] = [];
-  async scan(blob: Blob, opts: { manualQuad?: unknown } = {}): Promise<ScanSession> {
+  calls: { manualQuad?: unknown; approvedQuad?: unknown }[] = [];
+  async scan(blob: Blob, opts: { manualQuad?: unknown; approvedQuad?: unknown } = {}): Promise<ScanSession> {
     this.calls.push(opts);
     const spec = JSON.parse((await blob.text()).split('MOCKCARD\n')[1]) as Spec;
-    const status = opts.manualQuad ? 'manual' : spec.status;
+    const status = opts.manualQuad || opts.approvedQuad ? 'manual' : spec.status;
     const probs = [0.03, 0.03, 0.03, 0.03] as [number, number, number, number]; probs[spec.label] = 0.91;
     const good = (4 - spec.label) % 4;
     const cropped = (status === 'ok' || status === 'manual') && !spec.multiple;
@@ -161,6 +161,22 @@ describe('escáner + núcleo', () => {
     expect(cap.fields.company_name).toBe(X.company_name); // el OCR sí se hizo (orientado)
     expect([...drive.files.values()].map((f) => f.name).sort()).toEqual([`${c.external_ref}_01_card_front.jpg`, `${c.external_ref}_02_card_back.jpg`]);
     expect(sheets.asObjects()[0].review_fields).toContain('escaneo');
+  });
+
+  it('decisiones de recorte en la captura: «auto» viaja como recorte APROBADO, «manual» y «full» como esquinas exactas', async () => {
+    const { app, scanner } = await makeApp();
+    const q = [{ x: 5, y: 5 }, { x: 95, y: 6 }, { x: 94, y: 65 }, { x: 6, y: 64 }];
+    for (const decision of ['auto', 'manual', 'full'] as const) {
+      scanner.calls.length = 0;
+      const c = await app.saveCapture([{ kind: 'card_front', blob: photo({ status: 'ok', label: 0, lines: FRONT }), crop: { decision, quad: q, detector: { status: 'ok', confidence: 0.9 } } }]);
+      await app.ocr.idle();
+      const call = scanner.calls.at(-1)!;
+      if (decision === 'auto') { expect(call.approvedQuad).toEqual(q); expect(call.manualQuad).toBeUndefined(); }
+      else { expect(call.manualQuad).toEqual(q); expect(call.approvedQuad).toBeUndefined(); }
+      const orig = (await app.repo.evidences(c.uuid)).find((e) => e.role === 'original')!;
+      expect(orig.crop?.decision).toBe(decision);
+      expect(orig.scan?.manual_quad).toEqual(q); // lo aprobado queda registrado tal cual
+    }
   });
 
   it('esquinas manuales: el reproceso usa las esquinas indicadas y genera una versión nueva sin borrar la anterior', async () => {

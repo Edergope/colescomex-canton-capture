@@ -1,6 +1,7 @@
 // Pruebas visuales y funcionales de la experiencia móvil (UX/UI v1).
 // Solo datos FICTICIOS (e2e/support/seed.ts): las capturas de pantalla pueden publicarse.
 import { test, expect as baseExpect, type Page } from '@playwright/test';
+import { resolveCrops } from './support/crop';
 import fs from 'node:fs';
 import { seed, fictionalCardJpeg, SEED_CYCLE } from './support/seed';
 
@@ -109,7 +110,7 @@ for (const [dev, vp] of Object.entries(DEVICES)) {
         await (await chooser).setFiles(await fictionalCardJpeg(page));
         await expect(page.locator('#btn-save-next')).toBeVisible();
         await expect(page.locator('#crop-review')).toBeVisible();
-        await expect(page.locator('.cam-sheet .chip').first()).toContainText(/Recorte automático|Bordes dudosos|No se encontraron|varias/, { timeout: 60_000 });
+        await expect(page.locator('.cam-sheet .chip').first()).toContainText(/Recorte propuesto|Bordes dudosos|No se encontraron|varias/, { timeout: 60_000 });
         await audit(page, `${tag} vista previa`); await shot(page, `${tag}-09-vista-previa`);
       });
     });
@@ -241,6 +242,7 @@ test.describe('flujos', () => {
     const chooser = page.waitForEvent('filechooser');
     await page.locator('#btn-gallery').click();
     await (await chooser).setFiles(await fictionalCardJpeg(page));
+    await resolveCrops(page, 'auto');
     await page.locator('#btn-save-done').click();
     await page.locator('#btn-list').click();
     await page.locator('.supplier').first().click();

@@ -38,7 +38,9 @@ export function uploadPlan(c: Capture, evs: Evidence[], opts: { archive: boolean
     else if (!card || !opts.scannerEnabled) main = 'upload';
     else {
       const processed = evs.find((p) => p.role === 'processed' && p.derived_from === e.id && !p.superseded_by);
-      main = processed ? 'skip' : !e.scan && ocrPending ? 'wait' : 'upload';
+      // la decisión de recorte crea un `scan` provisional al guardar: «escaneada» = resultado real del escáner
+      const scanned = !!e.scan?.source_size;
+      main = processed ? 'skip' : !scanned && ocrPending ? 'wait' : 'upload';
       if (opts.archive) archive = 'upload';
     }
     if (e.remote_file_id && main !== 'skip') main = 'done';

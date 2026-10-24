@@ -90,7 +90,8 @@ export class OcrQueue {
     const gov = this.opts.governor;
     const mode = gov?.modeFor(attempt) ?? 'normal';
     const r = await processDocument({ ocr: this.engine, scanner: this.opts.scanner, governor: gov },
-      { blob: ev.blob, profile: BUSINESS_CARD, jobId: uuid, manualQuad: ev.scan?.manual_quad as never, mode });
+      // «auto» = recorte automático aprobado: se procesa ese recorte (afinado solo si la detección completa coincide)
+      { blob: ev.blob, profile: BUSINESS_CARD, jobId: uuid, ...(ev.crop?.decision === 'auto' ? { approvedQuad: ev.scan?.manual_quad as never } : { manualQuad: ev.scan?.manual_quad as never }), mode });
     let procId: string | undefined;
     const a = r.analysis;
     if (a) {

@@ -14,7 +14,7 @@ import { MODE_PARAMS, type ProcessingMode, type ResourceGovernor } from '../pipe
 import type { Quad } from './homography';
 
 export interface EngineDeps { ocr: OCRAdapter; scanner?: DocumentScanner; governor?: ResourceGovernor }
-export interface ProcessInput { blob: Blob; profile: DocumentProfile; jobId: string; manualQuad?: Quad; mode?: ProcessingMode }
+export interface ProcessInput { blob: Blob; profile: DocumentProfile; jobId: string; manualQuad?: Quad; /** recorte automático aprobado (ver ScanOptions) */ approvedQuad?: Quad; mode?: ProcessingMode }
 
 export type EngineIssue =
   | { code: 'not_cropped'; multiple: boolean; reasons: string[] }
@@ -64,7 +64,7 @@ export async function processDocument(deps: EngineDeps, input: ProcessInput): Pr
   }
 
   // ── Escaneo (en perfil exclusivo, PaddleOCR se libera antes) ──
-  const scanOpts: ScanOptions = { manualQuad: input.manualQuad, detect: input.profile.detect, maxOutputSide: input.profile.output.maxSide, fullSide: params.fullSide };
+  const scanOpts: ScanOptions = { manualQuad: input.manualQuad, approvedQuad: input.approvedQuad, detect: input.profile.detect, maxOutputSide: input.profile.output.maxSide, fullSide: params.fullSide };
   const openSession = async (): Promise<ScanSession> => {
     if (exclusive) await ocr.dispose();
     await governor?.begin(input.jobId, 'scan');
