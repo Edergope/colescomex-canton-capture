@@ -251,6 +251,8 @@ body.camera-open { overflow: hidden; }
 .camera .step-pill[aria-current="step"] { background: #fff; color: #0b1524; }
 .camera .step-pill.done { background: rgba(99, 211, 148, .28); color: #c9f5da; }
 .camera .viewport { position: relative; overflow: hidden; min-height: 0; }
+.camera .cam-stage { position: absolute; inset: 0; }
+.camera video[hidden] { display: none; }
 .camera video, .camera .still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .camera svg.guide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .camera .guide-frame { fill: none; stroke: rgba(255,255,255,.5); stroke-width: 2; stroke-dasharray: 10 8; vector-effect: non-scaling-stroke; }

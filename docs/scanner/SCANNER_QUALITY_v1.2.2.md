@@ -88,6 +88,44 @@ Se revisó todo el recorrido: cámara → foto → worker → detección → per
 | 7. Procesar lo aprobado | «Manual» y «foto completa» se procesan con esas esquinas exactas. «Auto» se procesa con el recorte aprobado; solo se sustituye por la detección a resolución completa si coincide con él (esquinas a ≤ 0,6 % de la diagonal). Así se conserva la precisión del OCR sin cambiar lo aprobado; si no coinciden, se usa exactamente lo aprobado. |
 | 8. Registros anteriores | Sin reproceso ni modificación automática. Los borradores anteriores sin decisión piden una decisión al guardarse; nunca se supone. |
 
+#### 2.2 Visor congelado al pulsar «Fotografiar reverso» (prueba física del propietario)
+
+**Resultado de la prueba física:**
+- **aprobado:** ajuste manual de las 4 esquinas (sin cambios en esta corrección);
+- **defecto:** tras fotografiar el anverso y pulsar «Fotografiar reverso», el visor no mostraba la cámara, aunque el obturador sí capturaba.
+
+**Reproducción antes de corregir** (`e2e/camera-live.spec.ts`, cámara simulada de Chromium). Estado medido del `<video>` tras «Fotografiar reverso»:
+
+```
+inDom: true, visible: true, streamActive: true, readyState: 4, 3840×2160,
+paused: TRUE, fotogramas nuevos en 1,2 s: 0, avance de currentTime: 0, píxeles cambiados: 0
+```
+
+**Causa:**
+- `drawViewport()` hacía `viewport.replaceChildren(...)` y retiraba el `<video>` del documento al mostrar la foto tomada.
+- La norma HTML **pausa** un elemento multimedia retirado del documento, y al reinsertarlo nadie llamaba a `play()`: el visor quedaba congelado.
+- El `MediaStream` seguía activo, y por eso `takePhoto()` capturaba igualmente: lee la pista, no el `<video>`.
+
+**Corrección** (`src/ui/screens/capture.ts` y dos reglas CSS). No toca el detector, el editor de esquinas, el OCR ni la sincronización.
+- El `<video>` queda **montado toda la sesión de cámara**. Al ver la foto solo se oculta (`hidden`); la guía, la pista y la foto se redibujan en una capa aparte (`.cam-stage`).
+- `ensureLive()` se ejecuta cada vez que el visor vuelve y al regresar de segundo plano (`visibilitychange`):
+  - mantiene la **misma sesión `MediaStream`**;
+  - vuelve a enlazar `srcObject` si hiciera falta;
+  - llama a `play()` si está en pausa, controlando el error;
+  - solo si el sistema cerró la cámara (pista `ended`) la vuelve a abrir.
+
+**Después de corregir** (misma prueba, en los seis puntos): `paused: false`, `readyState: 4`, 3840×2160, unos 25 fotogramas nuevos en 1,2 s, `currentTime` avanzando unos 1,3 s y píxeles distintos entre dos instantes. Además, **una sola** llamada a `getUserMedia` y el mismo `MediaStream` en todo el recorrido. Los seis puntos son:
+1. al abrir la cámara;
+2. tras «Fotografiar reverso»;
+3. al volver a la cámara para un extra;
+4. tras «Repetir foto»;
+5. tras «Guardar y siguiente proveedor»;
+6. al volver de segundo plano.
+
+**Aceptación en Android físico (propietario):**
+- fotografiar el anverso → «Fotografiar reverso» → se ve **inmediatamente** la imagen en vivo, se encuadra y se captura;
+- repetir con «Repetir foto», con «Guardar y siguiente proveedor» y cambiando a otra app y volviendo.
+
 **Defecto de sincronización encontrado durante esta corrección** (`src/sync/SyncEngine.ts`; ya existía en `f16611d`):
 - Al guardar una decisión de recorte se crea un registro de escaneo provisional con las esquinas aprobadas.
 - La sincronización lo tomaba por «ya escaneada» y podía subir la **foto original** (con dedos y fondo) a la carpeta del proveedor antes de que existiera el recorte.
@@ -214,7 +252,7 @@ Verificación final en `fix/scanner-quality` (ver el commit de la corrección):
 | Unitarias (`vitest`) | ✅ **160/160** en 16 archivos · 0 fallidas · 0 omitidas |
 | Build de producción | ✅ |
 | `check:dist` | ✅ 27 entradas de precaché · 16 archivos OCR (71,6 MB) idénticos al origen |
-| E2E Playwright | ✅ **37/37** · 0 fallidas · 0 omitidas |
+| E2E Playwright | ✅ **38/38** · 0 fallidas · 0 omitidas (incluye el visor en vivo, §2.2) |
 | `check:private` | ✅ 17 patrones, 0 coincidencias |
 
 **Pruebas E2E de la decisión de recorte** (`e2e/scanner-review.spec.ts`, 9 casos):

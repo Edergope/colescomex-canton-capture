@@ -60,6 +60,8 @@ export class CaptureFlow {
   private root = h('div', { class: 'camera', id: 'screen-capture', role: 'region', 'aria-label': 'Cámara de captura' });
   private video = h('video', { autoplay: true, muted: true, playsInline: true, 'aria-hidden': 'true' });
   private viewport = h('div', { class: 'viewport', 'aria-label': 'Visor de la cámara' });
+  /** capa sobre el vídeo (guía, pista, foto tomada, mensajes): se redibuja sin tocar el <video> */
+  private stage = h('div', { class: 'cam-stage' });
   private overlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   private hintEl = h('div', { class: 'hint', role: 'status', 'aria-live': 'polite', id: 'cam-hint' });
   private top = h('div', { class: 'cam-top' });
@@ -69,6 +71,10 @@ export class CaptureFlow {
   constructor(private ctx: Ctx) {
     this.overlay.setAttribute('class', 'guide'); this.overlay.setAttribute('aria-hidden', 'true');
     this.queuePill.addEventListener('click', () => this.ctx.go({ name: 'list', filter: 'pending' }));
+    // El <video> queda montado toda la sesión: si se retira del documento el navegador lo PAUSA (norma HTML) y al
+    // reinsertarlo el visor se queda congelado (defecto «Fotografiar reverso» en Android). Solo se oculta.
+    this.video.hidden = true;
+    this.viewport.append(this.video, this.stage);
   }
 
   async open(): Promise<HTMLElement> {
@@ -82,11 +88,13 @@ export class CaptureFlow {
     if (last) void this.analyzeShot();
     void this.updateQueue();
     void this.startCamera();
+    document.addEventListener('visibilitychange', this.onVisibility);
     return this.root;
   }
 
   close() {
     this.closed = true;
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.scanPreview.close();
     cancelAnimationFrame(this.raf);
     this.cam.stop(); this.hints.terminate();
@@ -106,12 +114,29 @@ export class CaptureFlow {
       await this.cam.start(this.video);
       if (this.closed) { this.cam.stop(); return; }
       this.live = true; this.camError = '';
-      this.loop();
+      cancelAnimationFrame(this.raf); this.loop();
     } catch (e) {
       const n = (e as Error).name;
       this.camError = n === 'NotAllowedError' ? 'Permiso de cámara denegado. Puede usar la cámara del sistema o la galería.' : 'No se pudo abrir la cámara. Use la cámara del sistema o la galería.';
     }
     if (!this.closed) this.draw();
+  }
+
+  private onVisibility = () => { if (!document.hidden) void this.ensureLive(); };
+
+  /**
+   * Garantiza que el visor reproduce la cámara cuando debe verse: misma sesión MediaStream (sin nuevas solicitudes de
+   * permiso); `play()` si quedó en pausa (vuelta de segundo plano, ocultación); solo si la pista terminó (el sistema
+   * cerró la cámara) se vuelve a abrir.
+   */
+  private async ensureLive() {
+    if (this.closed || !this.live || !('shoot' in this.mode) || document.hidden) return;
+    const v = this.video, stream = this.cam.stream;
+    if (!stream || !stream.active || stream.getVideoTracks().every((t) => t.readyState === 'ended')) {
+      this.live = false; this.cam.stop(); await this.startCamera(); return;
+    }
+    if (v.srcObject !== stream) v.srcObject = stream;
+    if (v.paused) await v.play().catch(() => undefined); // se reintenta en el próximo cambio de modo o de visibilidad
   }
 
   private loop = () => {
@@ -335,8 +360,10 @@ export class CaptureFlow {
   private drawViewport() {
     const shooting = 'shoot' in this.mode;
     const nodes: Node[] = [];
-    if (shooting && this.live) {
-      nodes.push(this.video, this.overlay, this.hintEl,
+    const showVideo = shooting && this.live;
+    this.video.hidden = !showVideo;
+    if (showVideo) {
+      nodes.push(this.overlay, this.hintEl,
         h('button', { class: 'queue-pill', id: 'btn-guide', style: 'position:absolute;top:8px;right:8px', 'aria-pressed': String(this.guide), onClick: () => {
           this.guide = !this.guide; try { localStorage.setItem(GUIDE_KEY, this.guide ? 'on' : 'off'); } catch { /* sin almacenamiento */ }
           this.lastHintStatus = ''; this.showHint(null, 0, 0); this.drawViewport();
@@ -371,7 +398,8 @@ export class CaptureFlow {
     } else {
       nodes.push(h('div', { class: 'cam-msg' }, icon('shield', 'lg'), h('b', null, 'Fotos protegidas en este dispositivo'), h('p', { class: 'small', style: 'color:#d6deea' }, 'Elija cómo continuar.')));
     }
-    this.viewport.replaceChildren(...nodes);
+    this.stage.replaceChildren(...nodes);
+    if (showVideo) void this.ensureLive();
   }
 
   private drawBottom() {
