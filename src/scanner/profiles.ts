@@ -17,7 +17,7 @@ export interface DocumentProfile {
 
 export const BUSINESS_CARD: DocumentProfile = {
   id: 'business_card', label: 'Tarjeta comercial',
-  detect: { aspectRange: [1.15, 2.4], minAreaFrac: 0.04 },
+  detect: { aspectRange: [1.15, 2.4], minAreaFrac: 0.02 },
   output: { maxSide: 2400, quality: 0.9 },
   ocrInputSide: 1600,
 };

@@ -93,11 +93,11 @@ export class CaptureApp {
   async reprocessOcr(uuid: string) { await this.ocr.reprocess(uuid, await this.user()); }
 
   /** Ajuste manual de esquinas (excepcional) y reproceso de la captura con ellas. */
-  async setManualCorners(evidenceId: string, quad: { x: number; y: number }[] | undefined) {
+  async setManualCorners(evidenceId: string, quad: { x: number; y: number }[] | undefined, decision: 'manual' | 'full' | 'auto' = 'manual') {
     const u = await this.user();
     const ev = await this.repo.getEvidence(evidenceId);
     if (!ev) throw new Error('Evidencia inexistente');
-    await this.repo.setManualQuad(evidenceId, quad, u);
+    await this.repo.setManualQuad(evidenceId, quad, u, decision);
     await this.ocr.reprocess(ev.capture_uuid, u);
   }
 

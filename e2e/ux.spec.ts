@@ -108,7 +108,8 @@ for (const [dev, vp] of Object.entries(DEVICES)) {
         await page.locator('#btn-gallery').click();
         await (await chooser).setFiles(await fictionalCardJpeg(page));
         await expect(page.locator('#btn-save-next')).toBeVisible();
-        await expect(page.locator('.cam-sheet .chip')).toContainText(/Bordes detectados|Bordes no claros|varias/);
+        await expect(page.locator('#crop-review')).toBeVisible();
+        await expect(page.locator('.cam-sheet .chip').first()).toContainText(/Recorte automático|Bordes dudosos|No se encontraron|varias/, { timeout: 60_000 });
         await audit(page, `${tag} vista previa`); await shot(page, `${tag}-09-vista-previa`);
       });
     });
@@ -248,11 +249,11 @@ test.describe('flujos', () => {
     const state = await page.locator('#scan-state').innerText();
     const uuid = (await captures(page))[0].uuid;
     const hasProcessed = async () => (await page.evaluate((u) => (window as unknown as W).__cx.app.repo.evidences(u), uuid)).some((e) => e.role === 'processed');
-    if (/recortado/i.test(state)) expect(await hasProcessed()).toBe(true);
+    if (/recortado|Recorte automático/i.test(state)) expect(await hasProcessed()).toBe(true);
     else expect(state).toMatch(/Procesando documento|No se detectaron|Sin procesar/);
 
     await expect.poll(hasProcessed, { timeout: 120_000 }).toBe(true);
-    await expect(page.locator('#scan-state')).toContainText(/recortado/i, { timeout: 10_000 });
+    await expect(page.locator('#scan-state')).toContainText(/recortado|Recorte automático/i, { timeout: 10_000 });
     await page.locator('[data-value="compare"]').click();
     await expect(page.locator('#doc-compare img')).toHaveCount(2);
     await shot(page, 'flujo-documento-comparar');

@@ -2,13 +2,17 @@ import type { IDBPDatabase } from 'idb';
 import type { CaptureDB } from './db';
 import {
   COMMERCIAL_FIELDS, DEFAULTS, type AuditEvent, type Capture, type CommercialField, type Evidence,
-  type EvidenceKind, type EvidenceScan, type FieldMeta, type OcrResultRecord, type UserProfile,
+  type CropDecision, type EvidenceKind, type EvidenceScan, type FieldMeta, type OcrResultRecord, type UserProfile,
 } from '../domain/schema';
 import { formatExternalRef, localDate, randomCode, uuid } from '../domain/ids';
 import { APP_VERSION } from '../config/version';
 
 export interface DeviceInfo { device_id: string; device_code: string }
-export interface NewEvidence { kind: EvidenceKind; blob: Blob; name?: string }
+export interface NewEvidence {
+  kind: EvidenceKind; blob: Blob; name?: string;
+  /** decisión de recorte tomada en la vista previa (esquinas en la foto con EXIF aplicado) */
+  crop?: { decision: CropDecision['decision']; quad?: { x: number; y: number }[]; detector?: CropDecision['detector'] };
+}
 export interface QuickFields { hall?: string; booth?: string; notes?: string; product_interest?: string }
 
 const EXT: Record<string, string> = {
@@ -85,6 +89,11 @@ export class CaptureRepo {
       id: uuid(), capture_uuid: capUuid, kind: e.kind, seq: e.seq, blob: e.blob, mime: e.mime, size: e.blob.size,
       file_name: `${external_ref}_${String(e.seq).padStart(2, '0')}_${e.kind}.${extFor(e.mime, e.name)}`,
       created_at: nowIso, role: 'original', sha256: e.sha256,
+      ...(e.crop ? {
+        crop: { decision: e.crop.decision, decided_at: nowIso, decided_by: user.id, detector: e.crop.detector },
+        // las esquinas que el operador vio (o ajustó) son las que usa el procesamiento: lo visto es lo que se guarda
+        ...(e.crop.quad?.length === 4 ? { scan: { status: 'manual', confidence: 1, multiple: false, reasons: [], cropped: false, rotation: 0, orientation_source: 'none', orientation_confident: false, at: nowIso, manual_quad: e.crop.quad } as EvidenceScan } : {}),
+      } : {}),
     }));
     const capture: Capture = {
       uuid: capUuid, external_ref, fields, field_meta, evidence_ids: evRecords.map((e) => e.id),
@@ -197,13 +206,14 @@ export class CaptureRepo {
   }
 
   /** Esquinas ajustadas a mano para una foto original (excepcional). El siguiente proceso las usa. */
-  async setManualQuad(evidenceId: string, quad: { x: number; y: number }[] | undefined, user: UserProfile): Promise<void> {
+  async setManualQuad(evidenceId: string, quad: { x: number; y: number }[] | undefined, user: UserProfile, decision: CropDecision['decision'] = 'manual'): Promise<void> {
     const tx = this.db.transaction(['evidences', 'audit'], 'readwrite');
     const e = await tx.objectStore('evidences').get(evidenceId);
     if (!e || e.role === 'processed') { await tx.done; throw new Error('Solo se ajustan esquinas sobre la foto original'); }
     const base: EvidenceScan = e.scan ?? { status: 'manual', confidence: 1, multiple: false, reasons: [], cropped: false, rotation: 0, orientation_source: 'none', orientation_confident: false, at: this.now().toISOString() };
-    await tx.objectStore('evidences').put({ ...e, scan: { ...base, manual_quad: quad } });
-    await tx.objectStore('audit').add({ capture_uuid: e.capture_uuid, at: this.now().toISOString(), actor: user.id, type: 'MANUAL_CORNERS', detail: { evidence: evidenceId, quad } });
+    const crop: CropDecision | undefined = quad ? { decision, decided_at: this.now().toISOString(), decided_by: user.id } : undefined;
+    await tx.objectStore('evidences').put({ ...e, scan: { ...base, manual_quad: quad }, crop });
+    await tx.objectStore('audit').add({ capture_uuid: e.capture_uuid, at: this.now().toISOString(), actor: user.id, type: 'MANUAL_CORNERS', detail: { evidence: evidenceId, quad, decision: quad ? decision : 'auto_detect' } });
     await tx.done;
     this.emit(e.capture_uuid);
   }

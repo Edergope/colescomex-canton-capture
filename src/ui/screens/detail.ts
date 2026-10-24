@@ -143,7 +143,10 @@ function evidenceBlock(ctx: Ctx, c: Capture, evs: Evidence[]) {
   }));
   const scans = originals.filter((e) => e.scan).map((e) => {
     const sc = e.scan!;
-    const [label, tone] = sc.multiple ? ['Varias tarjetas: se usa la foto original', 'warn' as const] : SCAN_LABEL[sc.status] ?? ['Sin procesar', 'warn' as const];
+    // la decisión del OPERADOR manda; sin ella, el recorte es automático y no fue revisado por una persona
+    const CROP: Record<string, [string, 'ok' | 'warn']> = { auto: ['Recorte automático visto al guardar', 'ok'], manual: ['Esquinas ajustadas por usted', 'ok'], full: ['Foto completa (sin recorte)', 'ok'] };
+    const [label, tone] = e.crop ? CROP[e.crop.decision] : sc.multiple ? ['Varias tarjetas: se usa la foto original', 'warn' as const]
+      : sc.status === 'ok' ? ['Recorte automático · sin revisar', 'warn' as const] : SCAN_LABEL[sc.status] ?? ['Sin procesar', 'warn' as const];
     return h('div', { class: 'row small', 'data-scan': `${e.kind}:${sc.status}` },
       chip(tone, tone === 'ok' ? 'crop' : 'alert', `${e.kind === 'card_front' ? 'Anverso' : 'Reverso'}: ${label}`),
       sc.rotation ? chip('neutral', 'refresh', `Girada ${sc.rotation}°`) : null,

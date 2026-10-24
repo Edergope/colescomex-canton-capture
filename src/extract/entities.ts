@@ -213,7 +213,8 @@ export function extractEntities(lines: OcrLine[]): SideExtraction {
             break;
           }
           case 'web': {
-            const v = normalizeWebsite(value.split(/\s+/)[0] ?? '');
+            // el OCR suele separar «www. dominio»: se unen los espacios junto a los puntos antes de cortar
+            const v = normalizeWebsite(value.replace(/\s*\.\s*/g, '.').split(/\s+/)[0] ?? '');
             const val = isValidWebsite(v);
             if (val.valid) push({ field: 'website', value: v, raw: value, line: idx, score, labeled: true, strength: 3, status: val.knownTld ? undefined : 'review', reason: val.knownTld ? undefined : 'dominio poco común' });
             else if (value) illegible.website ??= value;

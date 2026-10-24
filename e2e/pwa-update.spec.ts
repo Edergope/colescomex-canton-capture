@@ -63,6 +63,8 @@ function buildBranch(id: string, extraEnv: Record<string, string> = {}) {
 }
 
 const RUN = `${Date.now().toString(36)}`;
+/** versión actual (package.json), escapada para expresiones regulares */
+const VERSION_RE = (JSON.parse(fs.readFileSync('package.json', 'utf8')) as { version: string }).version.replace(/\./g, '\\.');
 const B1 = `B1-${RUN}`, B2 = `B2-${RUN}`, BW = `BW-${RUN}`;
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
@@ -264,7 +266,7 @@ test('actualizaciones siguientes: nunca recarga durante una captura; se aplica a
   // espera a que termine el OCR de la captura guardada (recargar durante el OCR se tomaría por un cierre por memoria)
   await expect.poll(() => safeEval(page, () => (window as unknown as { __m?: number }).__m ?? 'recargada'), { timeout: 300_000 }).toBe('recargada');
   await page.waitForLoadState('load');
-  await expect(page.getByText(new RegExp(`Actualizada a la versión 1\\.2\\.1 \\(${B2}\\)`))).toBeVisible();
+  await expect(page.getByText(new RegExp(`Actualizada a la versión ${VERSION_RE} \\(${B2}\\)`))).toBeVisible();
   await page.locator('[data-nav="settings"]').click();
   await expect(page.locator('#app-version')).toHaveAttribute('data-build', B2);
   await expect(page.locator('#update-phase')).toHaveAttribute('data-phase', /current|checking/);
@@ -299,7 +301,7 @@ test('descarga interrumpida: la app sigue en la versión actual, informa y reint
   // sin tocar nada: el reintento automático (15 s) completa la descarga
   // se descarga, se activa y se aplica sola (ajustes = momento seguro); la recarga verifica la compilación nueva
   await expect.poll(() => safeEval(page, () => document.querySelector('#app-version')?.getAttribute('data-build') ?? ''), { timeout: 180_000, intervals: [3000] }).toBe(B2);
-  await expect(page.getByText(new RegExp(`Actualizada a la versión 1\\.2\\.1 \\(${B2}\\)`))).toBeVisible();
+  await expect(page.getByText(new RegExp(`Actualizada a la versión ${VERSION_RE} \\(${B2}\\)`))).toBeVisible();
 });
 
 test('edición sin guardar: la versión nueva espera y no se pierde el texto; se aplica tras guardar', async ({ page, context }) => {
@@ -364,7 +366,7 @@ test('escenario F: otro origen (como Firebase) es otra app: no se actualiza desd
   await context.close();
 });
 
-test('resiliencia: si una publicación futura olvidara la activación automática, la app 1.2.1 la activa en un momento seguro', async ({ page, context }) => {
+test('resiliencia: si una publicación futura olvidara la activación automática, la app instalada la activa en un momento seguro', async ({ page, context }) => {
   test.setTimeout(300_000);
   expect(fs.readFileSync(path.join(OUT, BW, 'sw.js'), 'utf8')).not.toMatch(/self\.skipWaiting\(\),[a-z]\.clientsClaim\(\)/);
   await isolate(context);
@@ -376,5 +378,5 @@ test('resiliencia: si una publicación futura olvidara la activación automátic
   root = path.join(OUT, BW);
   await page.evaluate(() => (window as unknown as { __cx: { updater: { check(f: boolean): Promise<unknown> } } }).__cx.updater.check(true));
   await expect.poll(() => safeEval(page, () => document.querySelector('#app-version')?.getAttribute('data-build') ?? ''), { timeout: 120_000, intervals: [2000] }).toBe(BW);
-  await expect(page.getByText(new RegExp(`Actualizada a la versión 1\\.2\\.1 \\(${BW}\\)`))).toBeVisible();
+  await expect(page.getByText(new RegExp(`Actualizada a la versión ${VERSION_RE} \\(${BW}\\)`))).toBeVisible();
 });

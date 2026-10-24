@@ -234,7 +234,8 @@ test.describe('tarjetas reales (privadas)', () => {
 
       await page.locator('[data-nav="list"]').click();
       await page.locator(`[data-ref="${M.external_ref}"]`).click();
-      await expect(page.locator('[data-scan="card_front:ok"]')).toContainText('Recortada y enderezada');
+      // guardado sin elegir antes de terminar el análisis: recorte automático, marcado como NO revisado por una persona
+      await expect(page.locator('[data-scan="card_front:ok"]')).toContainText(/Recorte automático/);
       await expect(page.locator('[data-kv="qq"]')).toContainText(X.extras.qq[0]);
       await page.screenshot({ path: path.join(privateDir(), 'reports', `e2e-detalle-${rc.id}.png`), fullPage: true });
     });

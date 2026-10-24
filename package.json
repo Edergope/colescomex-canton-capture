@@ -1,6 +1,6 @@
 {
   "name": "colescomex-canton-capture",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "type": "module",
   "description": "COLESCOMEX — Canton Fair Capture (Fase 2, China 2026). PWA offline-first de captura de proveedores.",

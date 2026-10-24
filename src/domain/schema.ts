@@ -131,6 +131,20 @@ export interface Evidence {
   archived_at?: string;
   sha256?: string;
   scan?: EvidenceScan;
+  /**
+   * Decisión del OPERADOR sobre el recorte, tomada viendo la vista previa real del escáner:
+   * auto = aceptó el recorte automático mostrado; manual = ajustó las esquinas; full = conservó la foto completa.
+   * Sin este campo (capturas anteriores) el recorte es automático y no fue validado por una persona.
+   */
+  crop?: CropDecision;
+}
+
+export interface CropDecision {
+  decision: 'auto' | 'manual' | 'full';
+  decided_at: string;
+  decided_by?: string;
+  /** estado y confianza del detector cuando se decidió (trazabilidad) */
+  detector?: { status: string; confidence: number };
 }
 
 export interface Capture {

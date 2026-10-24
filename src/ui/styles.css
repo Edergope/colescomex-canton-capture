@@ -343,3 +343,15 @@ details > summary { padding: 12px 0; cursor: pointer; }
 .update-bar > .icon { color: var(--info); }
 body.camera-open .update-bar { bottom: auto; top: calc(var(--safe-t) + 64px); }
 .icon.spin { animation: spin 1.1s linear infinite; }
+
+/* Lupa del editor de esquinas */
+.ce-loupe { position: absolute; top: 8px; width: 132px; height: 132px; border-radius: var(--r-full); border: 3px solid #fff; box-shadow: 0 4px 18px rgba(0,0,0,.6); pointer-events: none; z-index: 2; }
+.ce-handle.active { fill: rgba(141, 179, 255, .95); }
+/* Revisión del recorte en la captura */
+.crop-review { display: grid; gap: var(--s2); }
+.crop-review .crop-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
+.crop-review .crop-actions .btn { flex-direction: column; gap: 2px; min-height: 60px; padding: 6px 4px; font-size: var(--t-xs); }
+.crop-review .crop-actions .btn[aria-pressed="true"] { border-color: var(--primary); background: var(--primary-soft); color: var(--link); }
+.camera .still.crop { object-fit: contain; background: #111; }
+/* la vista previa del recorte nunca queda tapada: la hoja ocupa como máximo ~55 % y se desplaza */
+.camera .cam-sheet { max-height: 55dvh; overscroll-behavior: contain; }

@@ -15,3 +15,5 @@ test-logs/
 
 # Artefactos de la prueba de actualización de la PWA (e2e/pwa-update.spec.ts)
 dist-update/
+ocr-eval/bench/tmp/
+ocr-eval/results/bench/debug/
