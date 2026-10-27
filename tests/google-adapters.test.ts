@@ -160,6 +160,36 @@ describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (in
     expect(classifySyncError(err.message).kind).toBe('integrity');
   });
 
+  it('INTEGRIDAD INDEPENDIENTE: mismo tamaño pero contenido distinto → el md5Checksum de Drive lo detecta; no se confirma ni se duplica', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const blob = photo(4096);
+    const first = await d.uploadEvidence('ROOT', up(blob));
+    const stored = g.files.find((x) => x.id === first.fileId)!;
+    stored.bytes = stored.bytes!.slice(); stored.bytes[100] ^= 0xff; // alterado en Drive, MISMO tamaño
+    const err = await d.uploadEvidence('ROOT', up(blob)).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(err.message).toMatch(/MD5/);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1); // ni duplicado ni borrado
+  });
+
+  it('INTEGRIDAD: sin md5Checksum de Drive el contenido NO es verificable → no se confirma (aunque el tamaño coincida)', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.md5Missing = true;
+    const err = await d.uploadEvidence('ROOT', up(photo(2048))).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(err.message).toMatch(/no se puede verificar el contenido/);
+    expect(classifySyncError(err.message).kind).toBe('integrity');
+    expect(g.log).toContain(`GET /drive/v3/files/${g.files.find((x) => x.appProperties?.evidence_id === 'ev-1')!.id}`); // intentó los metadatos
+  });
+
+  it('INTEGRIDAD: archivo de una versión anterior (sin sha256 en appProperties) se verifica por tamaño y MD5', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const blob = photo(3333);
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    delete g.files.find((x) => x.id === r.fileId)!.appProperties.sha256;
+    expect((await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-cualquiera' })).fileId).toBe(r.fileId);
+  });
+
   it('límite de ritmo de Google (403 userRateLimitExceeded) es TRANSITORIO: se reintenta solo', async () => {
     const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     g.errorNext(403, 'userRateLimitExceeded', 'User rate limit exceeded.');

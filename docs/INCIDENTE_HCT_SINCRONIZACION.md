@@ -42,7 +42,13 @@ Todas las capturas fallan en el **primer** archivo, mientras que crear carpetas 
 - **Cortes de red, 429 y 5xx:** espera exponencial con jitter (1 s, 2 s, 4 s… hasta 32 s), consulta de cuánto recibió Drive (`bytes */total`) y continuación desde ahí.
 - **Sesión caducada o invalidada (404/410):** antes de abrir otra sesión se busca el archivo por `evidence_id`; **nunca se duplica**.
 - **Respuesta final perdida** (el archivo llegó pero no la confirmación): la consulta de estado lo detecta y no se vuelve a subir.
-- **Verificación:** el archivo solo se marca subido si Drive devuelve su id y **el mismo tamaño** que en el teléfono.
+- **Verificación independiente del contenido:** un archivo, nuevo o reutilizado por `evidence_id`, solo se marca subido si coinciden con la foto del teléfono:
+  - el **tamaño**;
+  - el **`md5Checksum` que Google Drive calcula sobre los bytes que almacena**, comparado con el MD5 calculado en el teléfono (por bloques, sin cargar la foto entera).
+
+  Si Drive no informa tamaño o MD5 se consultan los metadatos. Si aun así no se puede verificar, o no coincide, la captura queda **pendiente**, con el aviso «El archivo en Drive no coincide con la foto del teléfono»: no se duplica ni se borra nada.
+
+  El `sha256` que guarda la app en `appProperties` lo escribe el propio cliente. Solo se usa para detectar otra versión de la evidencia, **nunca** como prueba de integridad. MD5 no protege frente a manipulaciones deliberadas, pero sí verifica que Drive guardó exactamente esos bytes.
 - **Errores con el motivo real de Google:**
   - `storageQuotaExceeded`: permanente;
   - `userRateLimitExceeded` / `rateLimitExceeded`: transitorio, aunque llegue como 403;

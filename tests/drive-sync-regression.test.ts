@@ -220,6 +220,25 @@ describe('sesión de Google, capturas antiguas y originales', () => {
     expect(l.device_code).toBe(c.external_ref.split('-')[2]);
   });
 
+  it('Drive sin md5Checksum → la captura queda PENDIENTE de verificación (ERROR de integridad), sin fila, sin duplicar', async () => {
+    const { g, repo, sync } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    g.md5Missing = true;
+    expect(await sync.syncOne(uuid)).toBe('failed');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_status).toBe('ERROR');
+    expect(classifySyncError(c.sync_error).kind).toBe('integrity');
+    expect(rows(g)).toHaveLength(0);
+    // cuando Drive vuelve a informar el MD5, se verifica el MISMO archivo (no se sube otro) y se confirma
+    g.md5Missing = false;
+    const before = g.files.filter((f) => f.mimeType !== FOLDER).length;
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    const ids = g.files.filter((f) => f.mimeType !== FOLDER).map((f) => `${f.parents[0]}:${f.appProperties.evidence_id}`);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBeGreaterThanOrEqual(before);
+    expect(rows(g)).toHaveLength(1);
+  });
+
   it('captura ANTIGUA (sin sha256, sin escaneo, sin decisión de recorte) se sincroniza igual y una sola vez', async () => {
     const { g, repo, sync } = await setup();
     const c = await repo.createCapture(USER, [{ kind: 'card_front', blob: jpeg('legacy-front') }]);

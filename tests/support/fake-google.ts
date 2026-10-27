@@ -2,6 +2,7 @@
 // las búsquedas respetan `'<carpeta>' in parents` como Drive real. Subida REANUDABLE como Drive (sesión, bloques con
 // Content-Range, 308 + Range, consulta de estado) y fallos reales inyectables: cuota llena, límite de ritmo, cortes de red.
 import { expect } from 'vitest';
+import { createHash } from 'node:crypto';
 
 export function fakeGoogle() {
   const files: { id: string; name: string; parents: string[]; mimeType: string; appProperties: Record<string, string>; size: number; bytes?: Uint8Array }[] = [];
@@ -14,6 +15,9 @@ export function fakeGoogle() {
   let completeButLoseResponse = false;
   let omitSize = false;
   let metadataWithoutSize = false;
+  let md5Missing = false;
+  /** md5Checksum como Drive: calculado sobre los bytes ALMACENADOS (solo archivos binarios) */
+  const md5 = (f: { bytes?: Uint8Array }) => (md5Missing || !f.bytes ? {} : { md5Checksum: createHash('md5').update(f.bytes).digest('hex') });
   const gErr = (status: number, reason: string, message: string) => json({ error: { code: status, message, errors: [{ reason, message }] } }, status);
   let grid: string[][] = [];
   const log: string[] = [];
@@ -36,13 +40,13 @@ export function fakeGoogle() {
       const props = [...qs.matchAll(/key='([^']+)' and value='([^']+)'/g)];
       const parent = qs.match(/'([^']+)' in parents/)?.[1];
       const out = files.filter((f) => props.every(([, k, v]) => f.appProperties[k] === v) && (!parent || f.parents.includes(parent)));
-      return json({ files: out.map((f) => ({ id: f.id, webViewLink: `https://drive/${f.id}`, ...(f.mimeType === 'application/vnd.google-apps.folder' ? {} : { size: String(f.size) }), appProperties: f.appProperties })) });
+      return json({ files: out.map((f) => ({ id: f.id, webViewLink: `https://drive/${f.id}`, ...(f.mimeType === 'application/vnd.google-apps.folder' ? {} : { size: String(f.size), ...md5(f) }), appProperties: f.appProperties })) });
     }
     const meta = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
     if (meta && method === 'GET') { // metadatos de un archivo (verificación de integridad)
       const f = files.find((x) => x.id === decodeURIComponent(meta[1]));
       if (!f) return gErr(404, 'notFound', 'File not found');
-      return json({ id: f.id, webViewLink: `https://drive/${f.id}`, ...(metadataWithoutSize ? {} : { size: String(f.size) }), appProperties: f.appProperties });
+      return json({ id: f.id, webViewLink: `https://drive/${f.id}`, ...(metadataWithoutSize ? {} : { size: String(f.size) }), ...md5(f), appProperties: f.appProperties });
     }
     if (url.pathname === '/drive/v3/files' && method === 'POST') {
       const b = JSON.parse(String(init.body)); const f = { ...b, id: `F${files.length + 1}`, size: 0 }; files.push(f);
@@ -69,7 +73,8 @@ export function fakeGoogle() {
         }
         if (uploadWithoutId) { uploadWithoutId = false; return json({}); }
         if (omitSize) { omitSize = false; return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}` }); }
-        return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}`, size: String(ses.received), appProperties: (ses.meta as { appProperties?: object }).appProperties });
+        const stored = files.find((x) => x.id === ses.fileId)!;
+        return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}`, size: String(ses.received), ...md5(stored), appProperties: (ses.meta as { appProperties?: object }).appProperties });
       };
       const partial = () => new Response(null, { status: 308, headers: ses.received ? { Range: `bytes=0-${ses.received - 1}` } : {} });
       const q = /^bytes \*\/(\d+)$/.exec(range);
@@ -123,5 +128,7 @@ export function fakeGoogle() {
     /** la respuesta final de la subida no incluye el tamaño (obliga a consultar metadatos) */
     omitSizeNext: () => { omitSize = true; },
     /** los metadatos tampoco informan el tamaño (no verificable) */
-    set metadataWithoutSize(v: boolean) { metadataWithoutSize = v; } };
+    set metadataWithoutSize(v: boolean) { metadataWithoutSize = v; },
+    /** Drive no informa md5Checksum (contenido no verificable) */
+    set md5Missing(v: boolean) { md5Missing = v; } };
 }

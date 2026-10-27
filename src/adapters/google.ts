@@ -2,6 +2,7 @@
 // ⚠ NO VERIFICADAS contra Google real: Antigravity debe configurarlas y probarlas (ANTIGRAVITY_HANDOFF.md).
 // Seguridad: solo usan el token OAuth del usuario (flujo de token de GIS en el navegador). Sin secretos en el frontend.
 import type { UserProfile } from '../domain/schema';
+import { md5Blob } from '../sync/md5';
 import {
   AuthRequiredError, NotAuthorizedError, TransientRemoteError,
   type AuthAdapter, type DriveAdapter, type EvidenceUpload, type SheetsAdapter,
@@ -64,7 +65,7 @@ const CHUNK_RETRIES = 4;
 export const backoff = (attempt: number) => Math.min(32_000, 1000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 1000);
 /** Archivo de Drive cuyo tamaño o versión no se pudo verificar o no coincide con la foto del teléfono: nunca se confirma. */
 export class IntegrityError extends Error {}
-type RemoteFile = { id: string; webViewLink?: string; size?: string | null; appProperties?: Record<string, string> };
+type RemoteFile = { id: string; webViewLink?: string; size?: string | null; md5Checksum?: string | null; appProperties?: Record<string, string> };
 /** La sesión reanudable caducó o se invalidó (404/410): hay que comprobar el archivo y abrir otra. */
 export class SessionLostError extends TransientRemoteError {}
 
@@ -76,28 +77,33 @@ export class GoogleDriveAdapter implements DriveAdapter {
   constructor(auth: AuthAdapter, private evidenceRootId: string, f: typeof fetch = fetch, private chunk = UPLOAD_CHUNK, private sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))) { this.api = authedFetch(auth, f); this.raw = tokenFetch(auth, f); }
 
   private async findOne(query: string): Promise<RemoteFile | undefined> {
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,webViewLink,size,appProperties)&supportsAllDrives=true&includeItemsFromAllDrives=true&pageSize=2`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,webViewLink,size,md5Checksum,appProperties)&supportsAllDrives=true&includeItemsFromAllDrives=true&pageSize=2`;
     const body = (await (await this.api(url)).json()) as { files: RemoteFile[] };
     return body.files[0];
   }
 
   /**
-   * INTEGRIDAD obligatoria antes de dar un archivo por subido (nuevo o reutilizado por evidence_id): Drive debe informar
-   * el tamaño y coincidir con el del teléfono, y el sha256 guardado en sus appProperties debe ser el de la evidencia.
-   * Sin tamaño en la respuesta se consultan los metadatos. Si no se puede verificar o no coincide, NO se confirma
-   * (IntegrityError: ni se crea un segundo archivo ni se borra nada; queda para revisión).
+   * INTEGRIDAD obligatoria antes de dar un archivo por subido (nuevo o reutilizado por evidence_id). Verificación
+   * INDEPENDIENTE del contenido: el tamaño y el `md5Checksum` que Google Drive CALCULA sobre los bytes que almacena deben
+   * coincidir con el tamaño y el MD5 calculados en el teléfono sobre la foto. (El sha256 de appProperties lo escribe
+   * el cliente: solo sirve para detectar otra versión de la evidencia, nunca como prueba de integridad.)
+   * Si Drive no informa tamaño o MD5 se consultan los metadatos; si aun así no se puede verificar, o no coincide,
+   * IntegrityError: la captura queda pendiente con la incidencia registrada, sin duplicar ni borrar nada.
    */
-  private async verifyRemote(f: RemoteFile, e: EvidenceUpload): Promise<{ fileId: string; url: string }> {
-    let { size, appProperties, webViewLink } = f;
-    if (size === undefined) {
-      const m = (await (await this.api(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}?fields=id,size,webViewLink,appProperties&supportsAllDrives=true`)).json()) as RemoteFile;
-      size = m.size; appProperties = m.appProperties ?? appProperties; webViewLink ??= m.webViewLink;
+  private async verifyRemote(f: RemoteFile, e: EvidenceUpload, localMd5: () => Promise<string>): Promise<{ fileId: string; url: string }> {
+    let { size, md5Checksum, appProperties, webViewLink } = f;
+    if (!size || !md5Checksum) {
+      const m = (await (await this.api(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}?fields=id,size,md5Checksum,webViewLink,appProperties&supportsAllDrives=true`)).json()) as RemoteFile;
+      size = m.size ?? size; md5Checksum = m.md5Checksum ?? md5Checksum; appProperties = m.appProperties ?? appProperties; webViewLink ??= m.webViewLink;
     }
-    if (size === undefined || size === null || size === '') throw new IntegrityError(`Drive no informó el tamaño de ${e.file_name}: no se puede verificar; no se confirma`);
+    if (!size) throw new IntegrityError(`Drive no informó el tamaño de ${e.file_name}: no se puede verificar; no se confirma`);
     if (Number(size) !== e.blob.size) throw new IntegrityError(`El archivo en Drive no coincide: ${e.file_name} tiene ${size} bytes y la foto ${e.blob.size}; no se confirma`);
-    if (e.sha256 && appProperties?.sha256 && appProperties.sha256 !== e.sha256) throw new IntegrityError(`El archivo en Drive no coincide: ${e.file_name} corresponde a otra versión (sha256); no se confirma`);
+    if (!md5Checksum) throw new IntegrityError(`Drive no informó la suma MD5 de ${e.file_name}: no se puede verificar el contenido; no se confirma`);
+    if (md5Checksum.toLowerCase() !== await localMd5()) throw new IntegrityError(`El archivo en Drive no coincide: el contenido de ${e.file_name} es distinto de la foto (MD5); no se confirma`);
+    if (e.sha256 && appProperties?.sha256 && appProperties.sha256 !== e.sha256) throw new IntegrityError(`El archivo en Drive no coincide: ${e.file_name} corresponde a otra versión de la evidencia; no se confirma`);
     return { fileId: f.id, url: webViewLink ?? `https://drive.google.com/file/d/${f.id}/view` };
   }
+
 
   async ensureCaptureFolder(c: { capture_uuid: string; external_ref: string }) {
     const found = await this.findOne(`'${q(this.evidenceRootId)}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key='capture_uuid' and value='${q(c.capture_uuid)}' }`);
@@ -115,15 +121,18 @@ export class GoogleDriveAdapter implements DriveAdapter {
   async uploadEvidence(folderId: string, e: EvidenceUpload) {
     // idempotencia: si el archivo de esta evidencia ya está en ESTA carpeta (subida anterior completa), no se repite
     const byEvidence = `'${q(folderId)}' in parents and trashed = false and appProperties has { key='evidence_id' and value='${q(e.evidence_id)}' }`;
+    // MD5 local calculado una sola vez y solo si hace falta (por bloques: no carga la foto entera en memoria)
+    let md5: Promise<string> | undefined;
+    const localMd5 = () => (md5 ??= md5Blob(e.blob));
     const found = await this.findOne(byEvidence);
-    if (found) return this.verifyRemote(found, e);
+    if (found) return this.verifyRemote(found, e, localMd5);
     const meta = { name: e.file_name, parents: [folderId], mimeType: e.mime,
       appProperties: { evidence_id: e.evidence_id, capture_uuid: e.capture_uuid, kind: e.kind, external_ref: e.external_ref, ...(e.sha256 ? { sha256: e.sha256 } : {}) } };
     // Subida REANUDABLE por bloques (Google la recomienda para archivos grandes y conexiones poco fiables; la multipart
     // obliga a reenviar todo ante un corte). Si la sesión caduca o se invalida (404/410), se comprueba primero si el
     // archivo llegó (por evidence_id) y solo entonces se abre otra: nunca se duplica.
     for (let session = 0; ; session++) {
-      const init = await this.api('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink,size,appProperties&supportsAllDrives=true', {
+      const init = await this.api('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink,size,md5Checksum,appProperties&supportsAllDrives=true', {
         method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': e.mime, 'X-Upload-Content-Length': String(e.blob.size) },
         body: JSON.stringify(meta),
       });
@@ -134,13 +143,13 @@ export class GoogleDriveAdapter implements DriveAdapter {
       catch (err) {
         if (!(err instanceof SessionLostError) || session >= 2) throw err;
         const done = await this.findOne(byEvidence);
-        if (done) return this.verifyRemote(done, e);
+        if (done) return this.verifyRemote(done, e, localMd5);
         continue; // sesión nueva desde el principio
       }
       const f = (await res.json()) as Partial<RemoteFile>;
       if (!f.id) throw new Error(`Drive no devolvió el identificador del archivo ${e.file_name}`);
       // verificación antes de marcarlo subido: Drive debe tener EXACTAMENTE los bytes del teléfono
-      return this.verifyRemote({ id: f.id, webViewLink: f.webViewLink, size: f.size, appProperties: f.appProperties ?? meta.appProperties }, e);
+      return this.verifyRemote({ id: f.id, webViewLink: f.webViewLink, size: f.size, md5Checksum: f.md5Checksum, appProperties: f.appProperties }, e, localMd5);
     }
   }
 
