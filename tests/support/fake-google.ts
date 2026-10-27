@@ -12,6 +12,8 @@ export function fakeGoogle() {
   let expireNext = false;
   let tooManyChunks = 0;
   let completeButLoseResponse = false;
+  let omitSize = false;
+  let metadataWithoutSize = false;
   const gErr = (status: number, reason: string, message: string) => json({ error: { code: status, message, errors: [{ reason, message }] } }, status);
   let grid: string[][] = [];
   const log: string[] = [];
@@ -34,7 +36,13 @@ export function fakeGoogle() {
       const props = [...qs.matchAll(/key='([^']+)' and value='([^']+)'/g)];
       const parent = qs.match(/'([^']+)' in parents/)?.[1];
       const out = files.filter((f) => props.every(([, k, v]) => f.appProperties[k] === v) && (!parent || f.parents.includes(parent)));
-      return json({ files: out.map((f) => ({ id: f.id, webViewLink: `https://drive/${f.id}` })) });
+      return json({ files: out.map((f) => ({ id: f.id, webViewLink: `https://drive/${f.id}`, ...(f.mimeType === 'application/vnd.google-apps.folder' ? {} : { size: String(f.size) }), appProperties: f.appProperties })) });
+    }
+    const meta = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+    if (meta && method === 'GET') { // metadatos de un archivo (verificación de integridad)
+      const f = files.find((x) => x.id === decodeURIComponent(meta[1]));
+      if (!f) return gErr(404, 'notFound', 'File not found');
+      return json({ id: f.id, webViewLink: `https://drive/${f.id}`, ...(metadataWithoutSize ? {} : { size: String(f.size) }), appProperties: f.appProperties });
     }
     if (url.pathname === '/drive/v3/files' && method === 'POST') {
       const b = JSON.parse(String(init.body)); const f = { ...b, id: `F${files.length + 1}`, size: 0 }; files.push(f);
@@ -60,7 +68,8 @@ export function fakeGoogle() {
           const f = { ...(ses.meta as object), id: `F${files.length + 1}`, size: ses.received, bytes } as (typeof files)[number]; files.push(f); ses.fileId = f.id;
         }
         if (uploadWithoutId) { uploadWithoutId = false; return json({}); }
-        return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}`, size: String(ses.received) });
+        if (omitSize) { omitSize = false; return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}` }); }
+        return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}`, size: String(ses.received), appProperties: (ses.meta as { appProperties?: object }).appProperties });
       };
       const partial = () => new Response(null, { status: 308, headers: ses.received ? { Range: `bytes=0-${ses.received - 1}` } : {} });
       const q = /^bytes \*\/(\d+)$/.exec(range);
@@ -110,5 +119,9 @@ export function fakeGoogle() {
     /** los próximos `n` bloques responden 429 rateLimitExceeded */
     rateLimitChunks: (n: number) => { tooManyChunks = n; },
     /** el último bloque llega a Drive pero la respuesta se pierde (corte justo al final) */
-    loseFinalResponse: () => { completeButLoseResponse = true; } };
+    loseFinalResponse: () => { completeButLoseResponse = true; },
+    /** la respuesta final de la subida no incluye el tamaño (obliga a consultar metadatos) */
+    omitSizeNext: () => { omitSize = true; },
+    /** los metadatos tampoco informan el tamaño (no verificable) */
+    set metadataWithoutSize(v: boolean) { metadataWithoutSize = v; } };
 }

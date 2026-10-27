@@ -6,6 +6,7 @@
 //
 // Uso:
 //   node --import tsx scripts/reconcile-google.ts --user HCT [--ledger diagnostico.json] [--out <dir privado>]
+import { redactError } from '../src/sync/redact';
 // Requiere `gws` autenticado con alcance de solo lectura (drive.readonly y spreadsheets.readonly).
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,10 +14,12 @@ import path from 'node:path';
 
 export interface DriveFolder { id: string; name: string; createdTime?: string; owner?: string; capture_uuid?: string; files: { name: string; size?: number; evidence_id?: string; kind?: string }[] }
 export interface LedgerEntry { external_ref: string; capture_uuid: string; sync_status: string; sync_attempts?: number; sync_error?: string; main?: { expected: number; uploaded: number }; archive?: { expected: number; uploaded: number } }
-export type Verdict = 'COMPLETA' | 'CARPETA_VACIA_SIN_FILA' | 'CARPETA_CON_ARCHIVOS_SIN_FILA' | 'FILA_SIN_ARCHIVOS' | 'SOLO_EN_DISPOSITIVO' | 'FILA_SIN_CARPETA';
+export type Verdict = 'COMPLETA' | 'FILA_DUPLICADA' | 'ARCHIVOS_DUPLICADOS' | 'ORIGINALES_AUSENTES' | 'ARCHIVOS_INCOMPLETOS'
+  | 'CARPETA_VACIA_SIN_FILA' | 'CARPETA_CON_ARCHIVOS_SIN_FILA' | 'FILA_SIN_ARCHIVOS' | 'SOLO_EN_DISPOSITIVO' | 'FILA_SIN_CARPETA';
+const VERDICTS: Verdict[] = ['COMPLETA', 'FILA_DUPLICADA', 'ARCHIVOS_DUPLICADOS', 'ORIGINALES_AUSENTES', 'ARCHIVOS_INCOMPLETOS', 'CARPETA_VACIA_SIN_FILA', 'CARPETA_CON_ARCHIVOS_SIN_FILA', 'FILA_SIN_ARCHIVOS', 'FILA_SIN_CARPETA', 'SOLO_EN_DISPOSITIVO'];
 export interface Reconciled {
   external_ref: string; capture_uuid: string; verdict: Verdict;
-  main: { folder: boolean; files: number }; archive: { folder: boolean; files: number };
+  main: { folder: boolean; files: number; duplicated: number }; archive: { folder: boolean; files: number; duplicated: number };
   row: { present: boolean; rows: number; captured_by?: string };
   device?: { sync_status: string; attempts?: number; error?: string; expected_main?: number; expected_archive?: number };
   folder_created?: string; folder_owner?: string;
@@ -28,44 +31,57 @@ export function reconcile(input: { user: string; main: DriveFolder[]; archive: D
   const byUuid = new Map<string, Reconciled>();
   const get = (uuid: string, ref: string): Reconciled => {
     let r = byUuid.get(uuid);
-    if (!r) byUuid.set(uuid, r = { external_ref: ref, capture_uuid: uuid, verdict: 'SOLO_EN_DISPOSITIVO', main: { folder: false, files: 0 }, archive: { folder: false, files: 0 }, row: { present: false, rows: 0 } });
+    if (!r) byUuid.set(uuid, r = { external_ref: ref, capture_uuid: uuid, verdict: 'SOLO_EN_DISPOSITIVO', main: { folder: false, files: 0, duplicated: 0 }, archive: { folder: false, files: 0, duplicated: 0 }, row: { present: false, rows: 0 } });
     if (!r.external_ref && ref) r.external_ref = ref;
     return r;
   };
+  /** archivos repetidos por evidence_id dentro de una misma carpeta */
+  const dupes = (f: DriveFolder) => { const ids = f.files.map((x) => x.evidence_id).filter(Boolean); return ids.length - new Set(ids).size; };
   // carpeta sin capture_uuid (no debería ocurrir): se identifica por nombre para no perderla
   const key = (f: DriveFolder) => f.capture_uuid || `sin-uuid:${f.name}`;
   for (const f of input.main.filter((x) => x.name.startsWith(prefix))) {
-    const r = get(key(f), f.name); r.main.folder = true; r.main.files += f.files.length;
+    const r = get(key(f), f.name); r.main.folder = true; r.main.files += f.files.length; r.main.duplicated += dupes(f);
     r.folder_created ??= f.createdTime; r.folder_owner ??= f.owner;
   }
-  for (const f of input.archive.filter((x) => x.name.startsWith(prefix))) { const r = get(key(f), f.name); r.archive.folder = true; r.archive.files += f.files.length; }
+  for (const f of input.archive.filter((x) => x.name.startsWith(prefix))) { const r = get(key(f), f.name); r.archive.folder = true; r.archive.files += f.files.length; r.archive.duplicated += dupes(f); }
   for (const row of input.rows.filter((x) => (x.external_ref ?? '').startsWith(prefix) || x.user_id === input.user)) {
     const r = get(row.capture_uuid || `sin-uuid:${row.external_ref}`, row.external_ref); r.row.present = true; r.row.rows++; r.row.captured_by = row.captured_by;
   }
   for (const l of input.ledger ?? []) {
     if (!l.external_ref.startsWith(prefix)) continue;
     const r = get(l.capture_uuid, l.external_ref);
-    r.device = { sync_status: l.sync_status, attempts: l.sync_attempts, error: l.sync_error, expected_main: l.main?.expected, expected_archive: l.archive?.expected };
+    r.device = { sync_status: l.sync_status, attempts: l.sync_attempts, error: redactError(l.sync_error), expected_main: l.main?.expected, expected_archive: l.archive?.expected };
   }
-  for (const r of byUuid.values()) {
-    const files = r.main.files + r.archive.files;
-    r.verdict = r.row.present
-      ? (!r.main.folder ? 'FILA_SIN_CARPETA' : r.main.files === 0 ? 'FILA_SIN_ARCHIVOS' : 'COMPLETA')
-      : r.main.folder || r.archive.folder ? (files ? 'CARPETA_CON_ARCHIVOS_SIN_FILA' : 'CARPETA_VACIA_SIN_FILA') : 'SOLO_EN_DISPOSITIVO';
-    // «completa» exige además los archivos esperados según el teléfono, si se conocen
-    if (r.verdict === 'COMPLETA' && r.device?.expected_main && r.main.files < r.device.expected_main) r.verdict = 'FILA_SIN_ARCHIVOS';
-  }
+  for (const r of byUuid.values()) r.verdict = verdictOf(r);
   const list = [...byUuid.values()].sort((a, b) => a.external_ref.localeCompare(b.external_ref));
   const count = (v: Verdict) => list.filter((r) => r.verdict === v).length;
   return {
     user: input.user, identified: list.length,
     complete: count('COMPLETA'),
     pending: list.filter((r) => r.verdict !== 'COMPLETA').length,
-    by_verdict: Object.fromEntries((['COMPLETA', 'CARPETA_VACIA_SIN_FILA', 'CARPETA_CON_ARCHIVOS_SIN_FILA', 'FILA_SIN_ARCHIVOS', 'FILA_SIN_CARPETA', 'SOLO_EN_DISPOSITIVO'] as Verdict[]).map((v) => [v, count(v)])),
+    by_verdict: Object.fromEntries(VERDICTS.map((v) => [v, count(v)])),
     duplicate_rows: list.filter((r) => r.row.rows > 1).map((r) => r.capture_uuid),
     device_errors: Object.entries(list.reduce<Record<string, number>>((m, r) => { const k = r.device?.error?.match(/Google HTTP \d+ ?\w*/)?.[0] ?? (r.device?.error ? 'otro' : ''); if (k) m[k] = (m[k] ?? 0) + 1; return m; }, {})),
     captures: list,
   };
+}
+
+/**
+ * COMPLETA solo con: UNA fila; carpeta principal con TODOS los archivos esperados; originales presentes en el respaldo
+ * (todos los esperados si el teléfono lo informa; al menos uno si no); y sin archivos repetidos por evidence_id.
+ * Cualquier otra combinación es una excepción con nombre propio: nunca se cuenta como sincronizada.
+ */
+export function verdictOf(r: Reconciled): Verdict {
+  const files = r.main.files + r.archive.files;
+  if (!r.row.present) return r.main.folder || r.archive.folder ? (files ? 'CARPETA_CON_ARCHIVOS_SIN_FILA' : 'CARPETA_VACIA_SIN_FILA') : 'SOLO_EN_DISPOSITIVO';
+  if (r.row.rows > 1) return 'FILA_DUPLICADA';
+  if (r.main.duplicated || r.archive.duplicated) return 'ARCHIVOS_DUPLICADOS';
+  if (!r.main.folder) return 'FILA_SIN_CARPETA';
+  if (r.main.files === 0) return 'FILA_SIN_ARCHIVOS';
+  if (r.device?.expected_main !== undefined && r.main.files < r.device.expected_main) return 'ARCHIVOS_INCOMPLETOS';
+  const originals = r.device?.expected_archive ?? 1;
+  if (r.archive.files < Math.max(1, originals)) return 'ORIGINALES_AUSENTES';
+  return 'COMPLETA';
 }
 
 /** Tabla final por captura (Markdown, sin datos comerciales). Esperados = según el teléfono; «?» si no hay diagnóstico. */

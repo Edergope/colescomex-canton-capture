@@ -181,6 +181,45 @@ describe('sesión de Google, capturas antiguas y originales', () => {
     expect(rows(g)).toHaveLength(1);
   });
 
+  it('archivo remoto que NO coincide (tamaño) → la captura queda en ERROR de integridad, sin fila y sin archivo duplicado', async () => {
+    const { g, repo, sync } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    // alguien/algo deja truncado el archivo del anverso en la carpeta del proveedor; se fuerza un reenvío de la captura
+    const front = (await repo.evidences(uuid)).find((e) => e.kind === 'card_front')!;
+    const mainFolder = (await repo.get(uuid))!.remote!.folder_id;
+    const remote = g.files.find((f) => f.appProperties.evidence_id === front.id && f.parents[0] === mainFolder)!;
+    remote.size = 1;
+    await repo.updateEvidence(front.id, { remote_file_id: undefined, remote_url: undefined, uploaded_at: undefined, archive_file_id: undefined, archive_url: undefined, archived_at: undefined });
+    await repo.update(uuid, (x) => { x.fields.notes = 'cambio'; }, { bump: true });
+    const rowsBefore = rows(g).length, filesBefore = g.files.length;
+    expect(await sync.syncOne(uuid)).toBe('failed');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_status).toBe('ERROR');
+    expect(classifySyncError(c.sync_error).kind).toBe('integrity');
+    expect(g.files.length).toBe(filesBefore); // ni duplicado ni borrado
+    expect(rows(g).length).toBe(rowsBefore);
+  });
+
+  it('el error de Google se GUARDA depurado (sin correo, URL de sesión ni token) y el registro técnico no expone ids internos', async () => {
+    const { repo, sync, setHook } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    setHook((url) => (url.includes('/upload/') ? new Response(JSON.stringify({ error: { code: 403, message: 'Denied for hector.demo@example.com at https://www.googleapis.com/upload/drive/v3/files?upload_id=SECRETSESSION123456789012345 Bearer ya29.secretToken', errors: [{ reason: 'insufficientFilePermissions' }] } }), { status: 403 }) : undefined));
+    expect(await sync.syncOne(uuid)).toBe('failed');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_error).toMatch(/Google HTTP 403 insufficientFilePermissions/);
+    for (const leak of ['hector.demo@example.com', 'googleapis.com', 'SECRETSESSION', 'ya29.']) expect(c.sync_error).not.toContain(leak);
+    const audit = JSON.stringify(await repo.audit(uuid));
+    for (const leak of ['hector.demo@example.com', 'SECRETSESSION', 'ya29.']) expect(audit).not.toContain(leak);
+    const { ledgerRow } = await import('../src/sync/ledger');
+    const l = ledgerRow(c, await repo.evidences(uuid), { archive: true, scannerEnabled: true }) as unknown as Record<string, unknown>;
+    expect(l).not.toHaveProperty('device_id');
+    expect(l).not.toHaveProperty('drive_folder_id');
+    expect(l).not.toHaveProperty('archive_folder_id');
+    expect(JSON.stringify(l)).not.toContain(c.device_id);
+    expect(l.device_code).toBe(c.external_ref.split('-')[2]);
+  });
+
   it('captura ANTIGUA (sin sha256, sin escaneo, sin decisión de recorte) se sincroniza igual y una sola vez', async () => {
     const { g, repo, sync } = await setup();
     const c = await repo.createCapture(USER, [{ kind: 'card_front', blob: jpeg('legacy-front') }]);

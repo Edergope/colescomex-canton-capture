@@ -1,7 +1,7 @@
 // Verifica la FORMA de las peticiones REST y la idempotencia de los adaptadores Google contra un
 // emulador mínimo de Drive v3 / Sheets v4. No sustituye la prueba real que debe hacer Antigravity.
 import { describe, expect, it } from 'vitest';
-import { GoogleDriveAdapter, GoogleSheetsAdapter, col } from '../src/adapters/google';
+import { GoogleDriveAdapter, GoogleSheetsAdapter, IntegrityError, col } from '../src/adapters/google';
 import { MockAuth } from '../src/adapters/mock';
 import { AuthRequiredError, TransientRemoteError } from '../src/adapters/contracts';
 import { fakeGoogle } from './support/fake-google';
@@ -129,6 +129,35 @@ describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (in
     const err = await d.ensureCaptureFolder({ capture_uuid: 'cap-1', external_ref: 'X' }).then(() => new Error('no falló'), (e: Error) => e);
     expect(err).not.toBeInstanceOf(TransientRemoteError);
     expect(classifySyncError(err.message).kind).toBe('permission');
+  });
+
+  it('INTEGRIDAD: archivo reutilizado por evidence_id solo se confirma con tamaño y sha256 coincidentes', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const blob = photo(5000);
+    const first = await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-A' });
+    // segunda pasada: se reutiliza (no se sube otra vez) porque coincide
+    expect((await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-A' })).fileId).toBe(first.fileId);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1);
+    // el archivo remoto quedó truncado: NO se confirma, no se crea otro y no se borra nada
+    g.files.find((x) => x.id === first.fileId)!.size = 4000;
+    const err = await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-A' }).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(err.message).toMatch(/no coincide/);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1);
+    // otra versión de la evidencia (sha256 distinto): tampoco se confirma
+    g.files.find((x) => x.id === first.fileId)!.size = 5000;
+    await expect(d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-B' })).rejects.toBeInstanceOf(IntegrityError);
+  });
+
+  it('INTEGRIDAD: respuesta sin tamaño → se consultan metadatos; si tampoco lo informan, NO se confirma', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.omitSizeNext();
+    const r = await d.uploadEvidence('ROOT', up(photo(3000)));
+    expect(g.log).toContain(`GET /drive/v3/files/${r.fileId}`); // verificado por metadatos
+    g.omitSizeNext(); g.metadataWithoutSize = true;
+    const err = await d.uploadEvidence('ROOT', up(photo(3000), 'ev-2')).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(classifySyncError(err.message).kind).toBe('integrity');
   });
 
   it('límite de ritmo de Google (403 userRateLimitExceeded) es TRANSITORIO: se reintenta solo', async () => {

@@ -33,15 +33,35 @@ describe('conciliación Drive + Sheets + teléfono', () => {
 
   it('tras la recuperación: completas, recuperadas y regresiones; fila con carpeta vacía o archivos incompletos ≠ completa', () => {
     const before = reconcile({ user: 'HCT', main: range(3).map((n) => folder('HCT', n)), archive: [], rows: [] });
-    const after = reconcile({ user: 'HCT', main: [folder('HCT', 1, 2), folder('HCT', 2, 1), folder('HCT', 3, 0)], archive: [], rows: [row('HCT', 1), row('HCT', 2), row('HCT', 3)],
+    const after = reconcile({ user: 'HCT', main: [folder('HCT', 1, 2), folder('HCT', 2, 1), folder('HCT', 3, 0)], archive: [folder('HCT', 1, 1)], rows: [row('HCT', 1), row('HCT', 2), row('HCT', 3)],
       ledger: [{ external_ref: ref('HCT', 2), capture_uuid: uuid('HCT', 2), sync_status: 'PENDIENTE', main: { expected: 2, uploaded: 1 } }] });
-    expect(after.captures.map((c) => c.verdict)).toEqual(['COMPLETA', 'FILA_SIN_ARCHIVOS', 'FILA_SIN_ARCHIVOS']);
-    expect(compareReports(before, after)).toEqual({ recovered: [ref('HCT', 1)], still_pending: [`${ref('HCT', 2)}: FILA_SIN_ARCHIVOS`, `${ref('HCT', 3)}: FILA_SIN_ARCHIVOS`], regressed: [] });
+    expect(after.captures.map((c) => c.verdict)).toEqual(['COMPLETA', 'ARCHIVOS_INCOMPLETOS', 'FILA_SIN_ARCHIVOS']);
+    expect(compareReports(before, after)).toEqual({ recovered: [ref('HCT', 1)], still_pending: [`${ref('HCT', 2)}: ARCHIVOS_INCOMPLETOS`, `${ref('HCT', 3)}: FILA_SIN_ARCHIVOS`], regressed: [] });
   });
 
   it('detecta filas duplicadas por capture_uuid', () => {
     const r = reconcile({ user: 'HCT', main: [folder('HCT', 1, 2)], archive: [], rows: [row('HCT', 1), row('HCT', 1)] });
     expect(r.duplicate_rows).toEqual([uuid('HCT', 1)]);
+  });
+
+  describe('COMPLETA es estricta (regresión)', () => {
+    const full = { main: [folder('HCT', 1, 2)], archive: [folder('HCT', 1, 1)], rows: [row('HCT', 1)] };
+    const verdict = (x: Partial<Parameters<typeof reconcile>[0]>) => reconcile({ user: 'HCT', ...full, ...x }).captures[0].verdict;
+    it('todo presente → COMPLETA (control)', () => { expect(verdict({})).toBe('COMPLETA'); });
+    it('fila duplicada → FILA_DUPLICADA, aunque los archivos estén', () => { expect(verdict({ rows: [row('HCT', 1), row('HCT', 1)] })).toBe('FILA_DUPLICADA'); });
+    it('originales requeridos ausentes en el respaldo → ORIGINALES_AUSENTES', () => {
+      expect(verdict({ archive: [] })).toBe('ORIGINALES_AUSENTES');
+      expect(verdict({ archive: [folder('HCT', 1, 0)] })).toBe('ORIGINALES_AUSENTES');
+      // el teléfono espera 2 originales (anverso y reverso) y solo hay 1
+      expect(verdict({ ledger: [{ external_ref: ref('HCT', 1), capture_uuid: uuid('HCT', 1), sync_status: 'CONFIRMADO', main: { expected: 2, uploaded: 2 }, archive: { expected: 2, uploaded: 1 } }] })).toBe('ORIGINALES_AUSENTES');
+    });
+    it('archivos principales incompletos según el teléfono → ARCHIVOS_INCOMPLETOS', () => {
+      expect(verdict({ ledger: [{ external_ref: ref('HCT', 1), capture_uuid: uuid('HCT', 1), sync_status: 'PENDIENTE', main: { expected: 3, uploaded: 2 }, archive: { expected: 1, uploaded: 1 } }] })).toBe('ARCHIVOS_INCOMPLETOS');
+    });
+    it('el mismo evidence_id repetido en una carpeta → ARCHIVOS_DUPLICADOS', () => {
+      const dup: DriveFolder = { ...folder('HCT', 1), files: [{ name: 'a.jpg', evidence_id: 'e1' }, { name: 'a.jpg', evidence_id: 'e1' }] };
+      expect(verdict({ main: [dup] })).toBe('ARCHIVOS_DUPLICADOS');
+    });
   });
 
   it('tabla final por captura: esperados (teléfono), encontrados (Drive), fila, error y estado', () => {

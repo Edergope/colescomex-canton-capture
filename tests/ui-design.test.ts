@@ -79,7 +79,9 @@ describe('modelo de presentación', () => {
     expect(classifySyncError('Google HTTP 403 userRateLimitExceeded: User rate limit exceeded').kind).toBe('rate_limit');
     expect(classifySyncError('Google HTTP 404: sesión de subida caducada').kind).toBe('offline'); // sesión de SUBIDA, no de Google
     expect(classifySyncError('La conexión se interrumpió durante la subida; se reintentará').kind).toBe('offline');
-    expect(classifySyncError('Drive guardó 10 bytes de 20 en x.jpg; se reintentará').title).toBe('No fue posible subir este archivo');
+    expect(classifySyncError('El archivo en Drive no coincide: x.jpg tiene 10 bytes y la foto 20; no se confirma').kind).toBe('integrity');
+    expect(classifySyncError('Drive no informó el tamaño de x.jpg: no se puede verificar; no se confirma').kind).toBe('integrity');
+    expect(classifySyncError('Error inesperado').title).toBe('No fue posible subir este archivo');
     expect(classifySyncError('Google HTTP 403 insufficientFilePermissions: no').kind).toBe('permission');
   });
 

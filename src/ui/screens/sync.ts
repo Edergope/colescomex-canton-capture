@@ -1,5 +1,6 @@
 // PANTALLA 9 — Sincronización: foto local · información extraída · Google confirmado, por separado.
 import { h, toast } from '../dom';
+import { redactError } from '../../sync/redact';
 import { SIMULATED_SYNC } from '../../config/env';
 import { APP_BUILD, APP_VERSION } from '../../config/version';
 import { icon } from '../icons';
@@ -90,7 +91,7 @@ export async function syncScreen(ctx: Ctx, all: Capture[]) {
             : c.sync_status === 'SINCRONIZANDO' ? 'Subiendo ahora' : c.ocr_status === 'CAPTURADO' || c.ocr_status === 'PROCESANDO' ? 'Esperando a que termine la lectura del documento' : 'En cola: se enviará automáticamente'))) : null,
         errors.length ? h('details', { id: 'sync-detail' }, h('summary', { class: 'small strong' }, `Detalle técnico por captura (${errors.length})`),
           h('ul', { class: 'mono xs', style: 'padding-left:1em;margin:0' }, ...errors.map((c) => h('li', { 'data-ref': c.external_ref },
-            h('b', null, c.external_ref), ` · intento ${c.sync_attempts} · `, c.sync_error ?? 'sin detalle')))) : null,
+            h('b', null, c.external_ref), ` · intento ${c.sync_attempts} · `, redactError(c.sync_error) ?? 'sin detalle')))) : null,
         ((): HTMLElement => {
           const pre = h('pre', { class: 'mono xs', id: 'sync-diag-text', style: 'white-space:pre-wrap;margin:0' }); pre.hidden = true;
           const b: HTMLButtonElement = h('button', { class: 'btn sm block', id: 'btn-copy-sync-diag', onClick: async () => {

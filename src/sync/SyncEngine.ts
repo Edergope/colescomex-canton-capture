@@ -3,6 +3,7 @@
 // por lo que un reintento retoma donde quedó sin duplicar carpetas, archivos ni filas.
 // Nunca se borra nada local. CONFIRMADO solo si todas las evidencias y la revisión actual de la fila están en Google.
 import type { CaptureRepo } from '../storage/repo';
+import { redactError } from './redact';
 import type { DriveAdapter, SheetsAdapter } from '../adapters/contracts';
 import { AuthRequiredError, TransientRemoteError } from '../adapters/contracts';
 import { toSheetRow } from './row';
@@ -191,8 +192,9 @@ export class SyncEngine {
     } catch (e) {
       const auth = e instanceof AuthRequiredError;
       const transient = e instanceof TransientRemoteError;
-      const msg = auth ? `${(e as Error).message}. Inicia sesión en Google y pulsa "Sincronizar".`
-        : transient ? `${(e as Error).message}. Se reintentará automáticamente.` : (e as Error).message;
+      // depurado ANTES de guardarlo: sin correos, URL de sesiones de subida, tokens ni ids opacos de Google
+      const msg = redactError(auth ? `${(e as Error).message}. Inicia sesión en Google y pulsa "Sincronizar".`
+        : transient ? `${(e as Error).message}. Se reintentará automáticamente.` : (e as Error).message, 400)!;
       await this.repo.update(uuid, (c) => {
         c.sync_status = 'ERROR'; c.sync_error = msg; c.sync_attempts += 1;
         c.sync_next_attempt_at = this.now() + (this.opts.backoffMs?.(c.sync_attempts) ?? syncBackoff(c.sync_attempts));

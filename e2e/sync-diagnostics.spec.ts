@@ -40,6 +40,8 @@ test('Sincronización: resumen y causa por captura, diagnóstico sin datos comer
   await expect(page.locator('#sync-diag-text')).toBeVisible();
   const text = await page.locator('#sync-diag-text').innerText();
   expect(text).not.toContain('Nimbus');
+  expect(text).not.toContain('"device_id"'); // sin id interno del dispositivo
+  expect(text).not.toMatch(/folder_id/);
   const diag = JSON.parse(text) as { app: { version: string }; captures: { external_ref: string; capture_uuid: string; sync_status: string; sync_attempts: number; sync_error: string; row: string; originals: number; main: { expected: number; uploaded: number } }[] };
   expect(diag.app.version).toBe('1.2.3');
   expect(diag.captures).toHaveLength(1);
