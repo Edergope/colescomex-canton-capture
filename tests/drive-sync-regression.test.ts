@@ -106,12 +106,68 @@ describe('la foto original nunca se publica antes de que el escáner la recorte'
   });
 });
 
+describe('incidente HCT: Drive lleno de la cuenta que sube → carpetas vacías, sin fila; recuperación automática e idempotente', () => {
+  it('reproduce los síntomas sin falso «confirmado» y recupera en las MISMAS carpetas con una fila por capture_uuid', async () => {
+    const { g, repo, sync } = await setup();
+    const HECTOR: UserProfile = { id: 'HCT', name: 'Héctor' };
+    // una captura de Eder ya sincronizada (sus filas no deben cambiar)
+    const eder = await capture(repo, 'cropped');
+    expect(await sync.syncOne(eder)).toBe('confirmed');
+    const ederRow = JSON.stringify(rows(g));
+    // tres capturas de Héctor
+    const hct: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const c = await repo.createCapture(HECTOR, [{ kind: 'card_front', blob: jpeg(`hct-front-${i}`) }, { kind: 'stand', blob: jpeg(`hct-stand-${i}`) }]);
+      await repo.update(c.uuid, (x) => { x.ocr_status = 'EXTRAIDO'; x.fields.company_name = `Demo HCT ${i}`; }, { bump: true });
+      hct.push(c.uuid);
+    }
+    // el Drive de Héctor está lleno: los archivos cuentan en la cuota de quien SUBE (las carpetas no ocupan espacio)
+    g.quotaFull = true;
+    await sync.syncAll({ force: true });
+    const folders = g.files.filter((f) => f.mimeType === FOLDER && /^CF26F2-HCT-/.test(f.name));
+    expect(folders).toHaveLength(6); // carpeta del proveedor + carpeta del respaldo por captura…
+    for (const f of folders) expect(filesIn(g, f.id)).toHaveLength(0); // …ambas VACÍAS, como en Drive real
+    expect(rows(g).filter((r) => r.captured_by === 'Héctor')).toHaveLength(0); // ninguna fila HCT
+    expect(JSON.stringify(rows(g))).toBe(ederRow);
+    for (const u of hct) {
+      const c = (await repo.get(u))!;
+      expect(c.sync_status).toBe('ERROR'); // nunca CONFIRMADO con una carpeta vacía
+      expect(c.sync_error).toMatch(/storageQuotaExceeded/);
+    }
+    const { ledgerRow } = await import('../src/sync/ledger');
+    const before = await Promise.all(hct.map(async (u) => ledgerRow((await repo.get(u))!, await repo.evidences(u), { archive: true, scannerEnabled: true })));
+    for (const l of before) expect(l).toMatchObject({ sync_status: 'ERROR', drive_folder: true, archive_folder: true, main: { uploaded: 0 }, archive: { uploaded: 0 } });
+
+    // Héctor libera espacio: el ciclo AUTOMÁTICO (sin pulsar «Sincronizar») completa todo
+    g.quotaFull = false;
+    await sync.syncAll();
+    const ref = (u: string) => repo.get(u).then((c) => c!);
+    for (const u of hct) {
+      const c = await ref(u);
+      expect(c.sync_status).toBe('CONFIRMADO');
+      expect(filesIn(g, c.remote!.folder_id).length).toBeGreaterThan(0);
+      expect(filesIn(g, c.remote!.archive_folder_id).length).toBeGreaterThan(0);
+    }
+    expect(g.files.filter((f) => f.mimeType === FOLDER && /^CF26F2-HCT-/.test(f.name))).toHaveLength(6); // mismas carpetas, ninguna nueva
+    const hctRows = rows(g).filter((r) => r.captured_by === 'Héctor');
+    expect(hctRows.map((r) => r.capture_uuid).sort()).toEqual([...hct].sort());
+    for (const r of hctRows) expect(r.external_ref).toMatch(/^CF26F2-HCT-/);
+    expect(rows(g).filter((r) => r.captured_by === 'Eder')).toHaveLength(1);
+    // idempotencia: otra pasada no crea archivos ni filas
+    const nFiles = g.files.length, nRows = rows(g).length;
+    await sync.syncAll({ force: true });
+    expect(g.files.length).toBe(nFiles);
+    expect(rows(g).length).toBe(nRows);
+  });
+});
+
 describe('reintentos: sin archivos ni filas duplicadas', () => {
   it('fallo a mitad de la subida → ERROR (no CONFIRMADO); el reintento completa sin duplicar', async () => {
     const { g, repo, sync, setHook } = await setup();
     const uuid = await capture(repo, 'not_cropped');
     let uploads = 0;
-    setHook((url) => (url.includes('/upload/') && ++uploads === 2 ? new Response('{}', { status: 503 }) : undefined));
+    // Drive deja de responder a mitad de las subidas (la subida reanudable reintenta cada bloque; aquí el fallo persiste)
+    setHook((url) => (url.includes('/upload/') && ++uploads >= 2 ? new Response('{}', { status: 503 }) : undefined));
     expect(await sync.syncOne(uuid)).toBe('failed');
     expect((await repo.get(uuid))!.sync_status).toBe('ERROR');
     expect(rows(g)).toHaveLength(0); // ninguna fila con evidencias a medias

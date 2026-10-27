@@ -4,63 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { GoogleDriveAdapter, GoogleSheetsAdapter, col } from '../src/adapters/google';
 import { MockAuth } from '../src/adapters/mock';
 import { AuthRequiredError, TransientRemoteError } from '../src/adapters/contracts';
+import { fakeGoogle } from './support/fake-google';
+import { classifySyncError } from '../src/ui/model';
 
-function fakeGoogle() {
-  const files: { id: string; name: string; parents: string[]; mimeType: string; appProperties: Record<string, string>; size: number }[] = [];
-  let grid: string[][] = [];
-  const log: string[] = [];
-  let failNext: number | null = null;
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
-  const parseA1 = (r: string) => {
-    const m = decodeURIComponent(r).match(/!([A-Z]*)(\d*)(?::([A-Z]*)(\d*))?/)!;
-    const toN = (c: string) => [...c].reduce((s, ch) => s * 26 + ch.charCodeAt(0) - 64, 0);
-    return { c1: m[1] ? toN(m[1]) : 1, r1: m[2] ? Number(m[2]) : 1, c2: m[3] ? toN(m[3]) : m[1] ? toN(m[1]) : 999, r2: m[4] ? Number(m[4]) : m[3] === undefined && m[2] ? Number(m[2]) : 99999 };
-  };
-  const fetchImpl = async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const url = new URL(String(input)); const method = init.method ?? 'GET';
-    log.push(`${method} ${url.pathname}`);
-    if (!(init.headers as Record<string, string>)?.Authorization?.startsWith('Bearer ')) return json({ error: 'no auth' }, 401);
-    if (failNext) { const s = failNext; failNext = null; return json({}, s); }
-    if (url.pathname === '/drive/v3/files' && method === 'GET') {
-      const qs = url.searchParams.get('q')!;
-      const props = [...qs.matchAll(/key='([^']+)' and value='([^']+)'/g)];
-      const parent = qs.match(/'([^']+)' in parents/)?.[1];
-      const out = files.filter((f) => props.every(([, k, v]) => f.appProperties[k] === v) && (!parent || f.parents.includes(parent)));
-      return json({ files: out.map((f) => ({ id: f.id, webViewLink: `https://drive/${f.id}` })) });
-    }
-    if (url.pathname === '/drive/v3/files' && method === 'POST') {
-      const b = JSON.parse(String(init.body)); const f = { ...b, id: `F${files.length + 1}`, size: 0 }; files.push(f);
-      return json({ id: f.id, webViewLink: `https://drive/${f.id}` });
-    }
-    if (url.pathname === '/upload/drive/v3/files') {
-      expect(url.searchParams.get('uploadType')).toBe('multipart');
-      const text = await (init.body as Blob).text();
-      const meta = JSON.parse(text.split('\r\n\r\n')[1].split('\r\n')[0]);
-      const f = { ...meta, id: `F${files.length + 1}`, size: text.length }; files.push(f);
-      return json({ id: f.id, webViewLink: `https://drive/${f.id}` });
-    }
-    const sm = url.pathname.match(/\/v4\/spreadsheets\/[^/]+\/values\/(.+?)(:(?:append|clear))?$/);
-    if (sm) {
-      const a = parseA1(sm[1]);
-      if (method === 'GET') {
-        const vals = grid.slice(a.r1 - 1, a.r2).map((r) => r.slice(a.c1 - 1, a.c2));
-        return json({ values: vals.length ? vals : undefined });
-      }
-      if (sm[2] === ':clear') {
-        if (grid[a.r1 - 1]) grid[a.r1 - 1] = [];
-        return json({ clearedRange: sm[1] });
-      }
-      const body = JSON.parse(String(init.body)) as { values: (string | null)[][] };
-      expect(url.searchParams.get('valueInputOption')).toBe('RAW');
-      if (sm[2] === ':append') { grid.push(body.values[0].map((v) => v ?? '')); return json({ updates: { updatedRange: `'T'!A${grid.length}:Z${grid.length}` } }); }
-      const r = grid[a.r1 - 1] ?? (grid[a.r1 - 1] = []);
-      body.values[0].forEach((v, i) => { if (v !== null) r[a.c1 - 1 + i] = v; });
-      return json({});
-    }
-    return json({ error: `ruta no emulada ${url.pathname}` }, 404);
-  };
-  return { files, get grid() { return grid; }, set grid(g) { grid = g; }, log, fetch: fetchImpl as typeof fetch, failWith: (s: number) => { failNext = s; } };
-}
+// emulador compartido (subida reanudable, motivos de error reales de Google)
 
 async function authed() { const a = new MockAuth([{ id: 'EDR', name: 'Eder' }]); await a.signIn('EDR'); return a; }
 
@@ -100,6 +47,49 @@ describe('GoogleDriveAdapter', () => {
     await expect(drive.ensureCaptureFolder({ capture_uuid: 'u', external_ref: 'r' })).rejects.toBeInstanceOf(AuthRequiredError);
     g.failWith(503);
     await expect(drive.ensureCaptureFolder({ capture_uuid: 'u', external_ref: 'r' })).rejects.toBeInstanceOf(TransientRemoteError);
+  });
+});
+
+describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (incidente HCT)', () => {
+  const photo = (n: number) => { const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = (i * 31 + 7) & 255; return new Blob([b], { type: 'image/jpeg' }); };
+  const up = (blob: Blob, id = 'ev-1') => ({ evidence_id: id, capture_uuid: 'cap-1', external_ref: 'CF26F2-HCT-CCCB-0001', kind: 'card_front' as const, file_name: 'CF26F2-HCT-CCCB-0001_01_card_front.jpg', mime: 'image/jpeg', blob });
+  const same = async (a: Uint8Array | undefined, b: Blob) => { const x = new Uint8Array(await b.arrayBuffer()); return !!a && a.length === x.length && a.every((v, i) => v === x[i]); };
+
+  it('foto grande (> 5 MB, como las de cámaras de muchos megapíxeles) se sube por bloques con los bytes idénticos', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const big = photo(6 * 1024 * 1024 + 123);
+    const r = await d.uploadEvidence('ROOT', up(big));
+    const f = g.files.find((x) => x.id === r.fileId)!;
+    expect(f.size).toBe(big.size);
+    expect(await same(f.bytes, big)).toBe(true);
+    expect(g.log.filter((l) => l === 'PUT /upload/drive/v3/files')).toHaveLength(2); // dos bloques de 4 MB
+  });
+
+  it('corte de red a mitad: continúa desde el último byte confirmado, sin archivo duplicado', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024);
+    const blob = photo(1024 * 1024 + 9);
+    g.dropChunks(2);
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1);
+    expect(await same(g.files.find((x) => x.id === r.fileId)!.bytes, blob)).toBe(true);
+  });
+
+  it('Drive lleno (403 storageQuotaExceeded): error PERMANENTE con su motivo, nunca «sin permiso»', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    g.quotaFull = true;
+    const err = (await d.uploadEvidence('ROOT', up(photo(1000))).then(() => new Error('no falló'), (e: Error) => e));
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TransientRemoteError);
+    expect(err.message).toMatch(/Google HTTP 403 storageQuotaExceeded/);
+    expect(classifySyncError(err.message)).toMatchObject({ kind: 'quota', title: 'El Drive de su cuenta de Google está lleno' });
+    expect(classifySyncError('Google HTTP 403 insufficientFilePermissions: The user does not have sufficient permissions').kind).toBe('permission');
+  });
+
+  it('límite de ritmo de Google (403 userRateLimitExceeded) es TRANSITORIO: se reintenta solo', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    g.errorNext(403, 'userRateLimitExceeded', 'User rate limit exceeded.');
+    await expect(d.ensureCaptureFolder({ capture_uuid: 'cap-1', external_ref: 'X' })).rejects.toBeInstanceOf(TransientRemoteError);
+    expect(classifySyncError('Google HTTP 403 userRateLimitExceeded: User rate limit exceeded.').kind).toBe('server');
   });
 });
 

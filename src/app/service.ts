@@ -1,6 +1,7 @@
 // Servicio de aplicación: une almacenamiento, cola OCR, sincronización y autenticación.
 // La UI solo habla con esta clase; las pruebas instancian varias (= varios teléfonos).
 import { openCaptureDB } from '../storage/db';
+import { syncLedger } from '../sync/ledger';
 import { CaptureRepo, type NewEvidence, type QuickFields } from '../storage/repo';
 import { OcrQueue, type OcrQueueOptions } from '../pipeline/ocrQueue';
 import { SyncEngine, type SyncOptions, type SyncReport } from '../sync/SyncEngine';
@@ -114,6 +115,9 @@ export class CaptureApp {
   }
 
   syncNow(force = false): Promise<SyncReport> { return this.sync.syncAll({ force }); }
+
+  /** Libro de sincronización por captura (sin datos personales): estado, error real y archivos subidos/esperados. */
+  syncLedger(onlyPending = false) { return syncLedger(this.repo, { archive: !!this.deps.archiveDrive, scannerEnabled: !!this.deps.scanner, onlyPending }); }
 
   /** Enlaces de Drive por revisar (solo lectura) y reparación explícita confirmada por el operador. */
   findMisfiledLinks() { return this.sync.findMisfiledEvidence(); }

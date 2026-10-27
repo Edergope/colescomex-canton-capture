@@ -15,26 +15,58 @@ export const GOOGLE_SCOPES = [
 
 type TokenFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
-/** fetch con token + clasificación de errores (401 → reautenticar, 429/5xx/red → transitorio). */
-export function authedFetch(auth: AuthAdapter, f: typeof fetch = fetch): TokenFetch {
-  return async (url, init = {}) => {
+/** Motivos de Google que son límites de ritmo o fallos del servicio: se reintentan (aunque lleguen como 403). */
+const TRANSIENT_REASONS = new Set(['userRateLimitExceeded', 'rateLimitExceeded', 'sharingRateLimitExceeded', 'backendError', 'internalError']);
+
+/**
+ * Error de Google con su MOTIVO real (p. ej. `storageQuotaExceeded`): el texto conserva estado, motivo y mensaje
+ * para que la app, el diagnóstico y la conciliación sepan exactamente qué falló (no todo 403 es «sin permiso»).
+ */
+export async function googleError(res: Response): Promise<Error> {
+  const text = await res.text().catch(() => '');
+  let reason = '', message = text.slice(0, 300);
+  try {
+    const j = JSON.parse(text) as { error?: { message?: string; status?: string; errors?: { reason?: string }[] } };
+    reason = j.error?.errors?.[0]?.reason ?? j.error?.status ?? '';
+    message = (j.error?.message ?? message).slice(0, 300);
+  } catch { /* cuerpo no JSON */ }
+  const msg = `Google HTTP ${res.status}${reason ? ` ${reason}` : ''}: ${message}`;
+  if (res.status === 401) return new AuthRequiredError('La sesión de Google expiró');
+  if (res.status === 429 || res.status >= 500 || TRANSIENT_REASONS.has(reason)) return new TransientRemoteError(msg);
+  return new Error(msg);
+}
+
+/** fetch con token y SIN clasificar el estado (para la subida reanudable, donde 308 es normal). */
+function tokenFetch(auth: AuthAdapter, f: typeof fetch) {
+  return async (url: string, init: RequestInit = {}) => {
     const token = await auth.getAccessToken();
-    let res: Response;
     try {
-      res = await f(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${token}` } });
+      return await f(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${token}` } });
     } catch (e) { throw new TransientRemoteError(`Red: ${(e as Error).message}`); }
-    if (res.status === 401) throw new AuthRequiredError('La sesión de Google expiró');
-    if (res.status === 429 || res.status >= 500) throw new TransientRemoteError(`Google HTTP ${res.status}`);
-    if (!res.ok) throw new Error(`Google HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  };
+}
+
+/** fetch con token + clasificación de errores (401 → reautenticar; 429/5xx/límites de ritmo/red → transitorio). */
+export function authedFetch(auth: AuthAdapter, f: typeof fetch = fetch): TokenFetch {
+  const raw = tokenFetch(auth, f);
+  return async (url, init = {}) => {
+    const res = await raw(url, init);
+    if (!res.ok) throw await googleError(res);
     return res;
   };
 }
+
+/** Tamaño de cada bloque de la subida reanudable (múltiplo de 256 KiB, como exige Drive). */
+export const UPLOAD_CHUNK = 4 * 1024 * 1024;
+/** Reintentos de un mismo bloque ante cortes de red antes de dejarlo para la siguiente sincronización. */
+const CHUNK_RETRIES = 4;
 
 const q = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 export class GoogleDriveAdapter implements DriveAdapter {
   private api: TokenFetch;
-  constructor(auth: AuthAdapter, private evidenceRootId: string, f: typeof fetch = fetch) { this.api = authedFetch(auth, f); }
+  private raw: ReturnType<typeof tokenFetch>;
+  constructor(auth: AuthAdapter, private evidenceRootId: string, f: typeof fetch = fetch, private chunk = UPLOAD_CHUNK) { this.api = authedFetch(auth, f); this.raw = tokenFetch(auth, f); }
 
   private async findOne(query: string): Promise<{ id: string; webViewLink?: string } | undefined> {
     const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,webViewLink)&supportsAllDrives=true&includeItemsFromAllDrives=true&pageSize=2`;
@@ -60,17 +92,53 @@ export class GoogleDriveAdapter implements DriveAdapter {
     if (found) return { fileId: found.id, url: found.webViewLink ?? `https://drive.google.com/file/d/${found.id}/view` };
     const meta = { name: e.file_name, parents: [folderId], mimeType: e.mime,
       appProperties: { evidence_id: e.evidence_id, capture_uuid: e.capture_uuid, kind: e.kind, external_ref: e.external_ref, ...(e.sha256 ? { sha256: e.sha256 } : {}) } };
-    const boundary = `cx${crypto.randomUUID().replace(/-/g, '')}`;
-    const body = new Blob([
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`,
-      `--${boundary}\r\nContent-Type: ${e.mime}\r\n\r\n`, e.blob, `\r\n--${boundary}--`,
-    ]);
-    const res = await this.api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink&supportsAllDrives=true', {
-      method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+    // Subida REANUDABLE por bloques: sirve para fotos de cualquier tamaño (la multipart está pensada para ≤ 5 MB) y,
+    // si la red/VPN se corta, continúa desde el último byte confirmado en lugar de empezar de cero.
+    const init = await this.api('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink&supportsAllDrives=true', {
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': e.mime, 'X-Upload-Content-Length': String(e.blob.size) },
+      body: JSON.stringify(meta),
     });
+    const session = init.headers.get('Location');
+    if (!session) throw new Error(`Drive no abrió la sesión de subida de ${e.file_name}`);
+    const res = await this.sendResumable(session, e.blob);
     const f = (await res.json()) as { id?: string; webViewLink?: string };
     if (!f.id) throw new Error(`Drive no devolvió el identificador del archivo ${e.file_name}`);
     return { fileId: f.id, url: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view` };
+  }
+
+  /** Envía el contenido a una sesión reanudable; ante cortes, pregunta a Drive cuánto recibió y continúa desde ahí. */
+  private async sendResumable(session: string, blob: Blob): Promise<Response> {
+    const total = blob.size;
+    const confirmed = (r: Response) => { const m = /bytes=0-(\d+)/.exec(r.headers.get('Range') ?? ''); return m ? Number(m[1]) + 1 : 0; };
+    /** Consulta el estado de la sesión: cuántos bytes tiene Drive (o el archivo ya creado). */
+    const status = async (): Promise<number | Response> => {
+      const r = await this.raw(session, { method: 'PUT', headers: { 'Content-Range': `bytes */${total}` } });
+      if (r.status === 200 || r.status === 201) return r;
+      if (r.status === 308) return confirmed(r);
+      throw await googleError(r);
+    };
+    let offset = 0, fails = 0;
+    for (;;) {
+      const end = Math.min(offset + this.chunk, total);
+      let r: Response;
+      try {
+        r = await this.raw(session, { method: 'PUT', headers: { 'Content-Range': total ? `bytes ${offset}-${end - 1}/${total}` : 'bytes */0' }, body: blob.slice(offset, end) });
+      } catch (err) {
+        if (++fails > CHUNK_RETRIES) throw err; // TransientRemoteError: la próxima sincronización lo reintentará
+        const st = await status();
+        if (st instanceof Response) return st;
+        offset = st; continue;
+      }
+      if (r.status === 200 || r.status === 201) return r;
+      if (r.status === 308) {
+        const next = confirmed(r);
+        if (next <= offset && ++fails > CHUNK_RETRIES) throw new TransientRemoteError('Drive no avanzó la subida reanudable');
+        if (next > offset) fails = 0;
+        offset = next; continue;
+      }
+      if (r.status >= 500 && ++fails <= CHUNK_RETRIES) { const st = await status(); if (st instanceof Response) return st; offset = st; continue; }
+      throw await googleError(r);
+    }
   }
 }
 

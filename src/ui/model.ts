@@ -39,10 +39,15 @@ export function dataTrack(c: Capture): Track {
   }
 }
 
-export type SyncProblem = 'offline' | 'auth' | 'permission' | 'server' | 'config' | 'upload';
+export type SyncProblem = 'offline' | 'auth' | 'quota' | 'too_large' | 'permission' | 'server' | 'config' | 'upload';
 export function classifySyncError(msg = ''): { kind: SyncProblem; title: string; help: string } {
   if (/bloquead|configuraci[oó]n incompleta|Falta VITE_/i.test(msg)) return { kind: 'config', title: 'Sincronización bloqueada por configuración', help: 'La app no tiene los destinos de Google correctos. Avise al responsable técnico; sus capturas siguen protegidas.' };
   if (/sesi[oó]n|Inicia sesi[oó]n|AuthRequired|Reconecta|expir/i.test(msg)) return { kind: 'auth', title: 'La sesión de Google expiró', help: 'Vuelva a conectar su cuenta de Google para continuar subiendo.' };
+  // Drive lleno: los archivos cuentan en la cuota de la cuenta que SUBE, aunque la carpeta sea del equipo (no es un permiso)
+  if (/storageQuotaExceeded|quotaExceeded|almacenamiento.*lleno/i.test(msg)) return { kind: 'quota', title: 'El Drive de su cuenta de Google está lleno', help: 'Las fotos que sube ocupan espacio en SU cuenta, aunque la carpeta sea del equipo. Libere espacio en drive.google.com/settings/storage; se reintentará solo y no se perdió nada.' };
+  if (/HTTP 413|too large|demasiado grande/i.test(msg)) return { kind: 'too_large', title: 'Archivo demasiado grande para Drive', help: 'Avise al responsable técnico; la foto sigue protegida en el teléfono.' };
+  // límites de ritmo de Google (llegan como 403/429): temporales, se reintentan solos
+  if (/RateLimitExceeded|HTTP (429|5\d\d)|backendError/i.test(msg)) return { kind: 'server', title: 'Google no respondió', help: 'Error temporal del servicio. Se reintentará automáticamente.' };
   if (/HTTP 403|permiso|permission|insufficient|forbidden/i.test(msg)) return { kind: 'permission', title: 'Sin permiso en Google Drive o Sheets', help: 'Su cuenta no puede escribir en la carpeta o la hoja. Pida acceso de edición; no se perdió nada.' };
   if (/Sin conexi[oó]n|Red:|network|Failed to fetch|conexi[oó]n perdida|offline/i.test(msg)) return { kind: 'offline', title: 'Sin conexión', help: 'Se reintentará automáticamente al volver la conexión.' };
   if (/HTTP (429|5\d\d)/.test(msg)) return { kind: 'server', title: 'Google no respondió', help: 'Error temporal del servicio. Se reintentará automáticamente.' };

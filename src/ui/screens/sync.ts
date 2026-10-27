@@ -78,6 +78,10 @@ export async function syncScreen(ctx: Ctx, all: Capture[]) {
       lastReport ? notice(lastReport.tone, lastReport.tone === 'ok' ? 'cloud-ok' : 'info', 'Último intento', h('p', null, `${lastReport.text} · ${new Date(lastReport.at).toLocaleTimeString('es', { timeStyle: 'short' })}`), undefined, 'sync-report') : null,
       btn,
       h('p', { class: 'xs muted', style: 'text-align:center' }, 'Reintentar no crea registros nuevos: cada captura conserva su identificador y su fila.'),
+      errors.length ? h('details', { id: 'sync-detail' }, h('summary', { class: 'small strong' }, `Detalle técnico por captura (${errors.length})`),
+        h('p', { class: 'xs muted' }, 'Muestre esta lista (o «Ajustes → Copiar diagnóstico») al responsable técnico: no contiene datos de proveedores.'),
+        h('ul', { class: 'mono xs', style: 'padding-left:1em;margin:0' }, ...errors.map((c) => h('li', { 'data-ref': c.external_ref },
+          h('b', null, c.external_ref), ` · intento ${c.sync_attempts} · `, c.sync_error ?? 'sin detalle')))) : null,
       h('h2', { class: 'section-title' }, pending.length ? `Pendientes (${pending.length})` : 'Pendientes'),
       pending.length ? h('div', { class: 'list', id: 'sync-pending' }, ...pending.slice(0, 20).map((c) => supplierCard(ctx, c)),
         pending.length > 20 ? h('button', { class: 'btn ghost block', onClick: () => ctx.go({ name: 'list', filter: 'pending' }) }, `Ver las ${pending.length}`) : null)
