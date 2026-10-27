@@ -1,7 +1,7 @@
 // Conciliación de solo lectura (scripts/reconcile-google.ts) con un escenario como el incidente HCT (datos ficticios):
 // 23 carpetas HCT vacías en EVIDENCIAS y en ORIGINALES, 41 filas EDR y ninguna HCT.
 import { describe, expect, it } from 'vitest';
-import { reconcile, compareReports, type DriveFolder, type LedgerEntry } from '../scripts/reconcile-google';
+import { reconcile, compareReports, toTable, type DriveFolder, type LedgerEntry } from '../scripts/reconcile-google';
 
 const ref = (u: string, n: number) => `CF26F2-${u}-${u === 'HCT' ? 'CCCB' : 'AB12'}-${String(n).padStart(4, '0')}`;
 const uuid = (u: string, n: number) => `${u.toLowerCase()}-uuid-${n}`;
@@ -42,5 +42,14 @@ describe('conciliación Drive + Sheets + teléfono', () => {
   it('detecta filas duplicadas por capture_uuid', () => {
     const r = reconcile({ user: 'HCT', main: [folder('HCT', 1, 2)], archive: [], rows: [row('HCT', 1), row('HCT', 1)] });
     expect(r.duplicate_rows).toEqual([uuid('HCT', 1)]);
+  });
+
+  it('tabla final por captura: esperados (teléfono), encontrados (Drive), fila, error y estado', () => {
+    const r = reconcile({ user: 'HCT', main: [folder('HCT', 1), folder('HCT', 2, 2)], archive: [folder('HCT', 1), folder('HCT', 2, 1)], rows: [row('HCT', 2)],
+      ledger: [{ external_ref: ref('HCT', 1), capture_uuid: uuid('HCT', 1), sync_status: 'ERROR', sync_error: 'Google HTTP 403 storageQuotaExceeded: full', main: { expected: 2, uploaded: 0 }, archive: { expected: 1, uploaded: 0 } }] });
+    const t = toTable(r).split('\n');
+    expect(t[0]).toBe('| external_ref | archivos esperados | archivos encontrados | fila Sheets | error | estado |');
+    expect(t[2]).toBe(`| ${ref('HCT', 1)} | 3 | 0 (0 evid. + 0 orig.) | NO | Google HTTP 403 storageQuotaExceeded: full | CARPETA_VACIA_SIN_FILA |`);
+    expect(t[3]).toBe(`| ${ref('HCT', 2)} | ? | 3 (2 evid. + 1 orig.) | SÍ | — | COMPLETA |`);
   });
 });

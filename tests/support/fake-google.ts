@@ -9,6 +9,9 @@ export function fakeGoogle() {
   let errorNext: { status: number; reason: string; message: string } | null = null;
   let quotaFull = false;
   let dropChunks = 0;
+  let expireNext = false;
+  let tooManyChunks = 0;
+  let completeButLoseResponse = false;
   const gErr = (status: number, reason: string, message: string) => json({ error: { code: status, message, errors: [{ reason, message }] } }, status);
   let grid: string[][] = [];
   const log: string[] = [];
@@ -57,7 +60,7 @@ export function fakeGoogle() {
           const f = { ...(ses.meta as object), id: `F${files.length + 1}`, size: ses.received, bytes } as (typeof files)[number]; files.push(f); ses.fileId = f.id;
         }
         if (uploadWithoutId) { uploadWithoutId = false; return json({}); }
-        return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}` });
+        return json({ id: ses.fileId, webViewLink: `https://drive/${ses.fileId}`, size: String(ses.received) });
       };
       const partial = () => new Response(null, { status: 308, headers: ses.received ? { Range: `bytes=0-${ses.received - 1}` } : {} });
       const q = /^bytes \*\/(\d+)$/.exec(range);
@@ -66,10 +69,13 @@ export function fakeGoogle() {
       expect(m, `Content-Range válido: ${range}`).toBeTruthy();
       const [a, b] = [Number(m![1]), Number(m![2])];
       if (dropChunks > 0) { dropChunks--; throw new TypeError('Failed to fetch'); } // corte de red: no llega nada de este bloque
+      if (expireNext) { expireNext = false; sessions.delete(url.searchParams.get('upload_id')!); return gErr(404, 'notFound', 'Upload session expired'); }
+      if (tooManyChunks > 0) { tooManyChunks--; return gErr(429, 'rateLimitExceeded', 'Rate Limit Exceeded'); }
       if (a !== ses.received) return partial();
       const chunk = new Uint8Array(await (init.body as Blob).arrayBuffer());
       expect(chunk.length).toBe(b - a + 1);
       ses.parts.push(chunk); ses.received += chunk.length;
+      if (ses.received === ses.total && completeButLoseResponse) { completeButLoseResponse = false; done(); throw new TypeError('Failed to fetch'); } // llegó, pero se perdió la respuesta
       return ses.received === ses.total ? done() : partial();
     }
     const sm = url.pathname.match(/\/v4\/spreadsheets\/[^/]+\/values\/(.+?)(:(?:append|clear))?$/);
@@ -98,5 +104,11 @@ export function fakeGoogle() {
     /** el Drive de la cuenta que sube está lleno (403 storageQuotaExceeded en cada subida) */
     set quotaFull(v: boolean) { quotaFull = v; },
     /** los próximos `n` bloques se pierden por un corte de red */
-    dropChunks: (n: number) => { dropChunks = n; } };
+    dropChunks: (n: number) => { dropChunks = n; },
+    /** la sesión reanudable caduca en el próximo bloque (404) */
+    expireSessionNext: () => { expireNext = true; },
+    /** los próximos `n` bloques responden 429 rateLimitExceeded */
+    rateLimitChunks: (n: number) => { tooManyChunks = n; },
+    /** el último bloque llega a Drive pero la respuesta se pierde (corte justo al final) */
+    loseFinalResponse: () => { completeButLoseResponse = true; } };
 }

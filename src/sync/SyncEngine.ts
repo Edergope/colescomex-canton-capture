@@ -19,6 +19,9 @@ export interface SyncOptions {
 
 /** Qué hacer con una evidencia en cada destino. */
 export type Action = 'upload' | 'done' | 'skip' | 'wait';
+/** Espera entre intentos de una captura: exponencial (10 s, 20 s, 40 s… hasta 10 min) con jitter ±25 %. */
+export const syncBackoff = (attempt: number) => Math.round(Math.min(10 * 60_000, 5_000 * 2 ** attempt) * (0.75 + Math.random() * 0.5));
+
 export interface EvidencePlan { main: Action; archive: Action }
 
 /**
@@ -192,7 +195,7 @@ export class SyncEngine {
         : transient ? `${(e as Error).message}. Se reintentará automáticamente.` : (e as Error).message;
       await this.repo.update(uuid, (c) => {
         c.sync_status = 'ERROR'; c.sync_error = msg; c.sync_attempts += 1;
-        c.sync_next_attempt_at = this.now() + (this.opts.backoffMs?.(c.sync_attempts) ?? Math.min(10 * 60_000, 5_000 * 2 ** c.sync_attempts));
+        c.sync_next_attempt_at = this.now() + (this.opts.backoffMs?.(c.sync_attempts) ?? syncBackoff(c.sync_attempts));
       }, { audit: { actor: 'system', type: 'SYNC_FAILED', detail: msg } });
       return auth ? 'auth' : !this.online() ? 'offline' : 'failed';
     }

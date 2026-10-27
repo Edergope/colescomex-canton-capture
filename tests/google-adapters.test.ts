@@ -5,6 +5,8 @@ import { GoogleDriveAdapter, GoogleSheetsAdapter, col } from '../src/adapters/go
 import { MockAuth } from '../src/adapters/mock';
 import { AuthRequiredError, TransientRemoteError } from '../src/adapters/contracts';
 import { fakeGoogle } from './support/fake-google';
+/** las pruebas no esperan de verdad entre reintentos */
+const NO_WAIT = async () => undefined;
 import { classifySyncError } from '../src/ui/model';
 
 // emulador compartido (subida reanudable, motivos de error reales de Google)
@@ -13,7 +15,7 @@ async function authed() { const a = new MockAuth([{ id: 'EDR', name: 'Eder' }]);
 
 describe('GoogleDriveAdapter', () => {
   it('carpeta y archivos idempotentes por appProperties', async () => {
-    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     const f1 = await drive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     const f2 = await drive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     expect(f1.folderId).toBe(f2.folderId);
@@ -26,8 +28,8 @@ describe('GoogleDriveAdapter', () => {
   });
   it('respeta el ámbito de carpeta padre y no confunde archivo del respaldo con carpeta principal', async () => {
     const g = fakeGoogle();
-    const mainDrive = new GoogleDriveAdapter(await authed(), 'ROOT_MAIN', g.fetch);
-    const archiveDrive = new GoogleDriveAdapter(await authed(), 'ROOT_ARCHIVE', g.fetch);
+    const mainDrive = new GoogleDriveAdapter(await authed(), 'ROOT_MAIN', g.fetch, undefined, NO_WAIT);
+    const archiveDrive = new GoogleDriveAdapter(await authed(), 'ROOT_ARCHIVE', g.fetch, undefined, NO_WAIT);
     const mainFolder = await mainDrive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     const archiveFolder = await archiveDrive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     expect(mainFolder.folderId).not.toBe(archiveFolder.folderId);
@@ -42,7 +44,7 @@ describe('GoogleDriveAdapter', () => {
     expect(g.files.find((f) => f.id === archUp.fileId)!.parents).toEqual([archiveFolder.folderId]);
   });
   it('clasifica errores: 401 → reautenticar, 503 → transitorio', async () => {
-    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     g.failWith(401);
     await expect(drive.ensureCaptureFolder({ capture_uuid: 'u', external_ref: 'r' })).rejects.toBeInstanceOf(AuthRequiredError);
     g.failWith(503);
@@ -56,7 +58,7 @@ describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (in
   const same = async (a: Uint8Array | undefined, b: Blob) => { const x = new Uint8Array(await b.arrayBuffer()); return !!a && a.length === x.length && a.every((v, i) => v === x[i]); };
 
   it('foto grande (> 5 MB, como las de cámaras de muchos megapíxeles) se sube por bloques con los bytes idénticos', async () => {
-    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     const big = photo(6 * 1024 * 1024 + 123);
     const r = await d.uploadEvidence('ROOT', up(big));
     const f = g.files.find((x) => x.id === r.fileId)!;
@@ -66,7 +68,7 @@ describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (in
   });
 
   it('corte de red a mitad: continúa desde el último byte confirmado, sin archivo duplicado', async () => {
-    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024);
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
     const blob = photo(1024 * 1024 + 9);
     g.dropChunks(2);
     const r = await d.uploadEvidence('ROOT', up(blob));
@@ -75,21 +77,65 @@ describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (in
   });
 
   it('Drive lleno (403 storageQuotaExceeded): error PERMANENTE con su motivo, nunca «sin permiso»', async () => {
-    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     g.quotaFull = true;
     const err = (await d.uploadEvidence('ROOT', up(photo(1000))).then(() => new Error('no falló'), (e: Error) => e));
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(TransientRemoteError);
     expect(err.message).toMatch(/Google HTTP 403 storageQuotaExceeded/);
-    expect(classifySyncError(err.message)).toMatchObject({ kind: 'quota', title: 'El Drive de su cuenta de Google está lleno' });
+    expect(classifySyncError(err.message)).toMatchObject({ kind: 'quota', title: 'El almacenamiento de su cuenta de Google está lleno' });
     expect(classifySyncError('Google HTTP 403 insufficientFilePermissions: The user does not have sufficient permissions').kind).toBe('permission');
   });
 
+  it('sesión reanudable caducada (404) a mitad: abre otra desde cero, sin archivo duplicado y con los bytes idénticos', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    const blob = photo(900 * 1024);
+    g.expireSessionNext();
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    const mine = g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1');
+    expect(mine).toHaveLength(1);
+    expect(mine[0].id).toBe(r.fileId);
+    expect(await same(mine[0].bytes, blob)).toBe(true);
+  });
+
+  it('el último bloque llega pero se pierde la respuesta: se consulta el estado y NO se vuelve a subir', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    g.loseFinalResponse();
+    const r = await d.uploadEvidence('ROOT', up(photo(600 * 1024)));
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1').map((x) => x.id)).toEqual([r.fileId]);
+  });
+
+  it('HTTP 429 en bloques: espera exponencial con jitter y completa', async () => {
+    const g = fakeGoogle(); const waits: number[] = [];
+    const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, async (ms) => { waits.push(ms); });
+    g.rateLimitChunks(3);
+    const blob = photo(700 * 1024);
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    expect(await same(g.files.find((x) => x.id === r.fileId)!.bytes, blob)).toBe(true);
+    expect(waits).toHaveLength(3);
+    waits.forEach((w, i) => { expect(w).toBeGreaterThanOrEqual(1000 * 2 ** i); expect(w).toBeLessThan(1000 * 2 ** i + 1000); });
+  });
+
+  it('429 persistente: se rinde como TRANSITORIO (lo retoma la siguiente sincronización), sin archivo a medias registrado', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    g.rateLimitChunks(50);
+    await expect(d.uploadEvidence('ROOT', up(photo(700 * 1024)))).rejects.toBeInstanceOf(TransientRemoteError);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(0);
+  });
+
+  it('permiso REAL insuficiente (403 insufficientFilePermissions): permanente y rotulado como permiso', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.errorNext(403, 'insufficientFilePermissions', 'The user does not have sufficient permissions for this file.');
+    const err = await d.ensureCaptureFolder({ capture_uuid: 'cap-1', external_ref: 'X' }).then(() => new Error('no falló'), (e: Error) => e);
+    expect(err).not.toBeInstanceOf(TransientRemoteError);
+    expect(classifySyncError(err.message).kind).toBe('permission');
+  });
+
   it('límite de ritmo de Google (403 userRateLimitExceeded) es TRANSITORIO: se reintenta solo', async () => {
-    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     g.errorNext(403, 'userRateLimitExceeded', 'User rate limit exceeded.');
     await expect(d.ensureCaptureFolder({ capture_uuid: 'cap-1', external_ref: 'X' })).rejects.toBeInstanceOf(TransientRemoteError);
-    expect(classifySyncError('Google HTTP 403 userRateLimitExceeded: User rate limit exceeded.').kind).toBe('server');
+    expect(classifySyncError('Google HTTP 403 userRateLimitExceeded: User rate limit exceeded.').kind).toBe('rate_limit');
   });
 });
 

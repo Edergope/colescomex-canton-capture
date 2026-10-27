@@ -1,6 +1,7 @@
 // PANTALLA 9 — Sincronización: foto local · información extraída · Google confirmado, por separado.
 import { h, toast } from '../dom';
 import { SIMULATED_SYNC } from '../../config/env';
+import { APP_BUILD, APP_VERSION } from '../../config/version';
 import { icon } from '../icons';
 import { appBar, emptyState, notice } from '../components';
 import { classifySyncError, type SyncProblem } from '../model';
@@ -56,7 +57,7 @@ export async function syncScreen(ctx: Ctx, all: Capture[]) {
 
   const reconnect = async (b: HTMLButtonElement) => {
     b.disabled = true;
-    try { await ctx.app.auth.signIn(ctx.user?.id); toast('Cuenta reconectada · sincronizando'); ctx.app.kickSync(); }
+    try { await ctx.app.signIn(ctx.user?.id); toast('Cuenta reconectada · sincronizando'); }
     catch (e) { toast(e instanceof AuthRequiredError ? 'No se pudo reconectar. Inténtelo con conexión.' : (e as Error).message, 6000); }
     finally { b.disabled = false; ctx.refresh(); }
   };
@@ -78,10 +79,31 @@ export async function syncScreen(ctx: Ctx, all: Capture[]) {
       lastReport ? notice(lastReport.tone, lastReport.tone === 'ok' ? 'cloud-ok' : 'info', 'Último intento', h('p', null, `${lastReport.text} · ${new Date(lastReport.at).toLocaleTimeString('es', { timeStyle: 'short' })}`), undefined, 'sync-report') : null,
       btn,
       h('p', { class: 'xs muted', style: 'text-align:center' }, 'Reintentar no crea registros nuevos: cada captura conserva su identificador y su fila.'),
-      errors.length ? h('details', { id: 'sync-detail' }, h('summary', { class: 'small strong' }, `Detalle técnico por captura (${errors.length})`),
-        h('p', { class: 'xs muted' }, 'Muestre esta lista (o «Ajustes → Copiar diagnóstico») al responsable técnico: no contiene datos de proveedores.'),
-        h('ul', { class: 'mono xs', style: 'padding-left:1em;margin:0' }, ...errors.map((c) => h('li', { 'data-ref': c.external_ref },
-          h('b', null, c.external_ref), ` · intento ${c.sync_attempts} · `, c.sync_error ?? 'sin detalle')))) : null,
+      // resumen verificable: qué hay en el teléfono, qué está COMPLETO en Google y qué impide completar cada captura
+      h('div', { class: 'card stack', id: 'sync-summary', role: 'group', 'aria-label': 'Resumen de sincronización' },
+        h('div', { class: 'row between small' }, h('span', null, 'Guardadas en este teléfono'), h('b', { 'data-count': 'local' }, String(total))),
+        h('div', { class: 'row between small' }, h('span', null, SIMULATED_SYNC ? 'Completas (simulado)' : 'Completas en Google'), h('b', { 'data-count': 'complete' }, String(confirmed))),
+        h('div', { class: 'row between small' }, h('span', null, 'Pendientes'), h('b', { 'data-count': 'pending' }, String(pending.length))),
+        h('div', { class: 'row between small' }, h('span', null, 'Con error'), h('b', { 'data-count': 'errors' }, String(errors.length))),
+        pending.length ? h('ul', { class: 'small', id: 'sync-causes', style: 'margin:0;padding-left:1.1em' }, ...pending.slice(0, 50).map((c) => h('li', { 'data-ref': c.external_ref },
+          h('b', null, c.external_ref), ' — ', c.sync_status === 'ERROR' ? classifySyncError(c.sync_error).title
+            : c.sync_status === 'SINCRONIZANDO' ? 'Subiendo ahora' : c.ocr_status === 'CAPTURADO' || c.ocr_status === 'PROCESANDO' ? 'Esperando a que termine la lectura del documento' : 'En cola: se enviará automáticamente'))) : null,
+        errors.length ? h('details', { id: 'sync-detail' }, h('summary', { class: 'small strong' }, `Detalle técnico por captura (${errors.length})`),
+          h('ul', { class: 'mono xs', style: 'padding-left:1em;margin:0' }, ...errors.map((c) => h('li', { 'data-ref': c.external_ref },
+            h('b', null, c.external_ref), ` · intento ${c.sync_attempts} · `, c.sync_error ?? 'sin detalle')))) : null,
+        ((): HTMLElement => {
+          const pre = h('pre', { class: 'mono xs', id: 'sync-diag-text', style: 'white-space:pre-wrap;margin:0' }); pre.hidden = true;
+          const b: HTMLButtonElement = h('button', { class: 'btn sm block', id: 'btn-copy-sync-diag', onClick: async () => {
+            b.disabled = true;
+            try {
+              // sin datos comerciales: referencias, identificadores, estados, conteos y errores reales
+              const text = JSON.stringify({ generated_at: new Date().toISOString(), app: { version: APP_VERSION, build: APP_BUILD }, user: ctx.user?.id, online: navigator.onLine, captures: await ctx.app.syncLedger(false) }, null, 2);
+              pre.textContent = text; pre.hidden = false;
+              try { await navigator.clipboard.writeText(text); toast('Diagnóstico copiado (sin datos de proveedores)'); } catch { toast('Diagnóstico mostrado abajo: cópielo y envíelo'); }
+            } finally { b.disabled = false; }
+          } }, icon('file', 'sm'), 'Copiar diagnóstico técnico');
+          return h('div', { class: 'stack' }, b, pre);
+        })()),
       h('h2', { class: 'section-title' }, pending.length ? `Pendientes (${pending.length})` : 'Pendientes'),
       pending.length ? h('div', { class: 'list', id: 'sync-pending' }, ...pending.slice(0, 20).map((c) => supplierCard(ctx, c)),
         pending.length > 20 ? h('button', { class: 'btn ghost block', onClick: () => ctx.go({ name: 'list', filter: 'pending' }) }, `Ver las ${pending.length}`) : null)

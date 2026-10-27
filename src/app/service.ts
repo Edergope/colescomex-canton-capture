@@ -47,10 +47,15 @@ export class CaptureApp {
     const repairedLinks = this.deps.autoRepairLinks === false ? 0 : await this.sync.repairMisfiledEvidence().catch(() => 0);
     const misfiledLinks = (await this.sync.findMisfiledEvidence().catch(() => ({ evidences: 0 }))).evidences;
     if (this.deps.autoSyncMs) {
+      // cola persistente (IndexedDB) con reintentos automáticos: el operador no tiene que pulsar «Sincronizar».
+      // Periódico (respeta la espera de cada captura) y, sin esperar, al recuperar la conexión o volver a la app.
       this.timers.push(setInterval(() => void this.syncNow().catch(() => undefined), this.deps.autoSyncMs));
-      if (typeof window !== 'undefined') window.addEventListener('online', () => this.kickSync());
+      if (typeof window !== 'undefined') {
+        window.addEventListener('online', () => this.kickSync(true));
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') this.kickSync(true); });
+      }
     }
-    this.kickSync();
+    this.kickSync(true); // al abrir la app
     return { resumedOcr, repairedLinks, misfiledLinks };
   }
 
@@ -128,9 +133,19 @@ export class CaptureApp {
     return n;
   }
 
-  kickSync() {
+  /** Sincroniza en breve. `force` ignora la espera de las capturas con error (conexión recuperada, app abierta, sesión renovada). */
+  kickSync(force = false) {
     if (this.kickTimer) clearTimeout(this.kickTimer);
-    this.kickTimer = setTimeout(() => { void this.syncNow().catch(() => undefined); }, this.deps.syncDebounceMs ?? 1500);
+    this.kickForce ||= force;
+    this.kickTimer = setTimeout(() => { const f = this.kickForce; this.kickForce = false; void this.syncNow(f).catch(() => undefined); }, this.deps.syncDebounceMs ?? 1500);
+  }
+  private kickForce = false;
+
+  /** Inicia o renueva la sesión de Google y reanuda AL MOMENTO las subidas pendientes. */
+  async signIn(userId?: string) {
+    const u = await this.auth.signIn(userId);
+    this.kickSync(true);
+    return u;
   }
 
   async counts() {

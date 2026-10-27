@@ -12,6 +12,9 @@ import { MockAuth } from '../src/adapters/mock';
 import type { DriveAdapter } from '../src/adapters/contracts';
 import type { EvidenceScan, UserProfile } from '../src/domain/schema';
 import { fakeGoogle } from './support/fake-google';
+import { classifySyncError } from '../src/ui/model';
+/** las pruebas no esperan de verdad entre reintentos */
+const NO_WAIT = async () => undefined;
 
 const USER: UserProfile = { id: 'EDR', name: 'Eder' };
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -24,8 +27,8 @@ async function setup(opts: { mainDrive?: (real: GoogleDriveAdapter, g: ReturnTyp
   const f = (async (i: RequestInfo | URL, init: RequestInit = {}) => hook?.(String(i), init) ?? g.fetch(i, init)) as typeof fetch;
   const auth = new MockAuth([USER]); await auth.signIn('EDR');
   const repo = new CaptureRepo(await openCaptureDB(`drive-reg-${++n}-${Math.random()}`));
-  const realMain = new GoogleDriveAdapter(auth, 'ROOT_MAIN', f);
-  const archive = new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', f);
+  const realMain = new GoogleDriveAdapter(auth, 'ROOT_MAIN', f, undefined, NO_WAIT);
+  const archive = new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', f, undefined, NO_WAIT);
   const sheets = new GoogleSheetsAdapter(auth, 'SHEET', 'CAPTURA_FASE2', f);
   const mk = (main: DriveAdapter) => new SyncEngine(repo, main, sheets, { archive, scannerEnabled: true, backoffMs: () => 0, isOnline: () => true });
   const sync = mk(opts.mainDrive ? opts.mainDrive(realMain, g) : realMain);
@@ -161,6 +164,48 @@ describe('incidente HCT: Drive lleno de la cuenta que sube → carpetas vacías,
   });
 });
 
+describe('sesión de Google, capturas antiguas y originales', () => {
+  it('la sesión de Google expira a mitad de la subida → ERROR de sesión; al renovarla se completa sin duplicar', async () => {
+    const { g, repo, sync, setHook } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    let n = 0;
+    setHook((url, init) => (init.method === 'PUT' && url.includes('/upload/') && ++n === 1 ? new Response('{}', { status: 401 }) : undefined));
+    expect(await sync.syncOne(uuid)).toBe('auth');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_status).toBe('ERROR');
+    expect(classifySyncError(c.sync_error).kind).toBe('auth');
+    setHook(undefined); // sesión renovada
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    const ids = g.files.filter((f) => f.mimeType !== FOLDER).map((f) => `${f.parents[0]}:${f.appProperties.evidence_id}`);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(rows(g)).toHaveLength(1);
+  });
+
+  it('captura ANTIGUA (sin sha256, sin escaneo, sin decisión de recorte) se sincroniza igual y una sola vez', async () => {
+    const { g, repo, sync } = await setup();
+    const c = await repo.createCapture(USER, [{ kind: 'card_front', blob: jpeg('legacy-front') }]);
+    await repo.update(c.uuid, (x) => { x.ocr_status = 'EXTRAIDO'; x.app_version = '1.0.0'; }, { bump: true });
+    const [ev] = await repo.evidences(c.uuid);
+    // como la escribía la v1.0: sin sha256 ni escaneo (escritura directa en la base de PRUEBA)
+    await (repo as unknown as { db: { put(s: string, v: unknown): Promise<unknown> } }).db.put('evidences', { ...ev, sha256: undefined, scan: undefined });
+    expect(await sync.syncOne(c.uuid)).toBe('confirmed');
+    expect(rows(g).map((r) => r.capture_uuid)).toEqual([c.uuid]);
+  });
+
+  it('los ORIGINALES llegan al respaldo byte a byte y el teléfono los conserva intactos', async () => {
+    const { g, repo, sync } = await setup();
+    const uuid = await capture(repo, 'cropped');
+    const orig = (await repo.evidences(uuid)).find((e) => e.kind === 'card_front' && e.role === 'original')!;
+    const before = new Uint8Array(await orig.blob.arrayBuffer());
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    const af = (await repo.get(uuid))!.remote!.archive_folder_id;
+    const archived = g.files.find((f) => f.parents[0] === af && f.appProperties.evidence_id === orig.id)!;
+    expect([...archived.bytes!]).toEqual([...before]);
+    const after = new Uint8Array(await (await repo.getEvidence(orig.id))!.blob.arrayBuffer());
+    expect([...after]).toEqual([...before]);
+  });
+});
+
 describe('reintentos: sin archivos ni filas duplicadas', () => {
   it('fallo a mitad de la subida → ERROR (no CONFIRMADO); el reintento completa sin duplicar', async () => {
     const { g, repo, sync, setHook } = await setup();
@@ -274,7 +319,7 @@ describe('producción: reparaciones de enlaces solo con aprobación del operador
     const auth = new MockAuth([USER]); await auth.signIn('EDR');
     const app = await CaptureApp.create({
       dbName: `drive-prod-${++n}-${Math.random()}`, auth, ocr: new MockOCRAdapter({ delayMs: 1 }), resources: false, syncDebounceMs: 60_000,
-      drive: new GoogleDriveAdapter(auth, 'ROOT_MAIN', g.fetch), archiveDrive: new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', g.fetch),
+      drive: new GoogleDriveAdapter(auth, 'ROOT_MAIN', g.fetch, undefined, NO_WAIT), archiveDrive: new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', g.fetch, undefined, NO_WAIT),
       sheets: new GoogleSheetsAdapter(auth, 'SHEET', 'CAPTURA_FASE2', g.fetch), autoRepairLinks: false,
     });
     try {

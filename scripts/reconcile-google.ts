@@ -68,6 +68,19 @@ export function reconcile(input: { user: string; main: DriveFolder[]; archive: D
   };
 }
 
+/** Tabla final por captura (Markdown, sin datos comerciales). Esperados = según el teléfono; «?» si no hay diagnóstico. */
+export function toTable(report: ReturnType<typeof reconcile>): string {
+  const head = '| external_ref | archivos esperados | archivos encontrados | fila Sheets | error | estado |\n|---|---:|---:|---|---|---|';
+  const lines = report.captures.map((c) => {
+    const expected = c.device?.expected_main !== undefined ? (c.device.expected_main ?? 0) + (c.device.expected_archive ?? 0) : '?';
+    const found = `${c.main.files + c.archive.files} (${c.main.files} evid. + ${c.archive.files} orig.)`;
+    const row = c.row.present ? (c.row.rows > 1 ? `SÍ ×${c.row.rows} (duplicada)` : 'SÍ') : 'NO';
+    const err = (c.device?.error ?? '').replace(/\|/g, '/').slice(0, 90) || '—';
+    return `| ${c.external_ref} | ${expected} | ${found} | ${row} | ${err} | ${c.verdict} |`;
+  });
+  return [head, ...lines].join('\n');
+}
+
 /** Comparación con un informe anterior: qué capturas pasaron a COMPLETA (recuperadas) y cuáles fallan aún. */
 export function compareReports(before: ReturnType<typeof reconcile>, after: ReturnType<typeof reconcile>) {
   const prev = new Map(before.captures.map((c) => [c.capture_uuid, c.verdict]));
@@ -111,7 +124,8 @@ if (process.argv[1] && /reconcile-google\.ts$/.test(process.argv[1])) {
   const out = path.resolve(arg('out') ?? path.join('..', 'colescomex-private-fixtures', 'reports'));
   if (out.startsWith(path.resolve('.'))) throw new Error('El informe contiene identificadores operativos: guárdelo fuera del repositorio (--out).');
   const ledgerFile = arg('ledger');
-  const ledger = ledgerFile ? ((JSON.parse(fs.readFileSync(ledgerFile, 'utf8')) as { sync?: LedgerEntry[] }).sync ?? []) : undefined;
+  // diagnóstico copiado del teléfono: «Sincronización → Copiar diagnóstico técnico» (captures) o «Ajustes» (sync)
+  const ledger = ledgerFile ? ((d: { sync?: LedgerEntry[]; captures?: LedgerEntry[] }) => d.captures ?? d.sync ?? [])(JSON.parse(fs.readFileSync(ledgerFile, 'utf8'))) : undefined;
   const prefix = `CF26F2-${user}-`;
   const report = reconcile({
     user, ledger,
@@ -125,6 +139,7 @@ if (process.argv[1] && /reconcile-google\.ts$/.test(process.argv[1])) {
   const prevFile = arg('previous');
   const diff = prevFile ? compareReports(JSON.parse(fs.readFileSync(prevFile, 'utf8')), report) : undefined;
   fs.writeFileSync(file, JSON.stringify({ generated_at: new Date().toISOString(), read_only: true, ...report, ...(diff ? { comparison: diff } : {}) }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(file.replace(/\.json$/, '.md'), `# Conciliación ${user} (solo lectura) · ${new Date().toISOString()}\n\n${toTable(report)}\n`, { mode: 0o600 });
   const { captures: _omit, ...summary } = report;
   console.log(JSON.stringify({ ...summary, ...(diff ? { comparison: diff } : {}), saved: file }, null, 2));
 }
