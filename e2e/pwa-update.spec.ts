@@ -2,7 +2,8 @@
 // (/colescomex-canton-capture/), con los artefactos que estuvieron publicados:
 //   · deployed/v1.0.0 → la versión que ejecuta el teléfono del propietario (gh-pages 9945243)
 //   · deployed/v1.2.0 → la publicada hoy (gh-pages d6d8cd3)
-//   · deployed/v1.2.1 → la producción actual antes de v1.2.2 (gh-pages c493c74)
+//   · deployed/v1.2.1 → la producción anterior a v1.2.2 (gh-pages c493c74)
+//   · deployed/v1.2.2 → la producción actual antes de v1.2.3 (gh-pages 4b7624a)
 // y esta rama compilada dos veces (B1, B2) para probar las actualizaciones siguientes.
 // Datos 100 % ficticios. Las versiones de producción no pueden acceder a Google: todo lo externo se bloquea.
 import { test, expect as baseExpect, type Page, type BrowserContext } from '@playwright/test';
@@ -75,6 +76,7 @@ test.beforeAll(async () => {
   if (has('deployed/v1.0.0')) extract('deployed/v1.0.0', path.join(OUT, 'A-v1.0.0'));
   if (has('deployed/v1.2.0')) extract('deployed/v1.2.0', path.join(OUT, 'A-v1.2.0'));
   if (has('deployed/v1.2.1')) extract('deployed/v1.2.1', path.join(OUT, 'A-v1.2.1'));
+  if (has('deployed/v1.2.2')) extract('deployed/v1.2.2', path.join(OUT, 'A-v1.2.2'));
   buildBranch(B1); buildBranch(B2);
   buildBranch(BW, { VITE_SW_NO_AUTOACTIVATE: '1' }); // publicación hipotética SIN activación automática
   await new Promise<void>((r) => server.listen(PORT, r));
@@ -263,6 +265,13 @@ test('v1.2.1 en producción → v1.2.2: misma garantía (datos, borrador, sin re
   test.skip(!has('deployed/v1.2.1'), 'artefacto deployed/v1.2.1 no disponible en este clon');
   test.setTimeout(480_000);
   const { ocrDownloads } = await legacyToNew(page, context, path.join(OUT, 'A-v1.2.1'), { safeMoment: true });
+  expect(ocrDownloads).toEqual([]); // mismos modelos OCR que la producción actual
+});
+
+test('v1.2.2 en producción → v1.2.3: misma garantía (datos, borrador, sin reinstalar, sin descargas repetidas)', async ({ page, context }) => {
+  test.skip(!has('deployed/v1.2.2'), 'artefacto deployed/v1.2.2 no disponible en este clon');
+  test.setTimeout(480_000);
+  const { ocrDownloads } = await legacyToNew(page, context, path.join(OUT, 'A-v1.2.2'), { safeMoment: true });
   expect(ocrDownloads).toEqual([]); // mismos modelos OCR que la producción actual
 });
 

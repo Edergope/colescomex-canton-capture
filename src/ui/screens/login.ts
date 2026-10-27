@@ -12,7 +12,7 @@ export function loginScreen(ctx: Ctx) {
   const signIn = async (id: string, btn: HTMLButtonElement) => {
     btn.disabled = true; btn.setAttribute('aria-busy', 'true');
     try {
-      const u = await ctx.app.auth.signIn(id);
+      const u = await ctx.app.signIn(id);
       ctx.setUser(u);
       ctx.replace({ name: 'home' });
       ctx.app.kickSync();

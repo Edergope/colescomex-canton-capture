@@ -39,14 +39,22 @@ export function dataTrack(c: Capture): Track {
   }
 }
 
-export type SyncProblem = 'offline' | 'auth' | 'permission' | 'server' | 'config' | 'upload';
+export type SyncProblem = 'offline' | 'auth' | 'quota' | 'too_large' | 'rate_limit' | 'integrity' | 'permission' | 'server' | 'config' | 'upload';
 export function classifySyncError(msg = ''): { kind: SyncProblem; title: string; help: string } {
   if (/bloquead|configuraci[oó]n incompleta|Falta VITE_/i.test(msg)) return { kind: 'config', title: 'Sincronización bloqueada por configuración', help: 'La app no tiene los destinos de Google correctos. Avise al responsable técnico; sus capturas siguen protegidas.' };
-  if (/sesi[oó]n|Inicia sesi[oó]n|AuthRequired|Reconecta|expir/i.test(msg)) return { kind: 'auth', title: 'La sesión de Google expiró', help: 'Vuelva a conectar su cuenta de Google para continuar subiendo.' };
+  // Drive lleno: los archivos cuentan en la cuota de la cuenta que SUBE, aunque la carpeta sea del equipo (no es un permiso)
+  if (/storageQuotaExceeded|quotaExceeded|almacenamiento.*lleno/i.test(msg)) return { kind: 'quota', title: 'El almacenamiento de su cuenta de Google está lleno', help: 'Las fotos que sube ocupan espacio en SU cuenta, aunque la carpeta sea del equipo. Libere espacio en drive.google.com/settings/storage; se reintentará solo y no se perdió nada.' };
+  // sesión de Google (OAuth), nunca la «sesión de subida» reanudable de Drive
+  if (/AuthRequired|La sesi[oó]n de Google|Inicia sesi[oó]n|Reconecta|HTTP 401/i.test(msg)) return { kind: 'auth', title: 'La sesión de Google expiró; reconecte su cuenta', help: 'Vuelva a conectar su cuenta de Google: las subidas pendientes se reanudan solas al hacerlo.' };
+  // integridad: el archivo de Drive no se pudo verificar o no coincide con la foto → nunca se confirma
+  if (/no coincide|no se puede verificar/i.test(msg)) return { kind: 'integrity', title: 'El archivo en Drive no coincide con la foto del teléfono', help: 'No se dio por subido. Copie el diagnóstico y avise al responsable técnico; la foto sigue protegida en el teléfono.' };
+  if (/HTTP 413|too large|demasiado grande/i.test(msg)) return { kind: 'too_large', title: 'No fue posible subir este archivo', help: 'Drive lo rechazó por su tamaño. Avise al responsable técnico; la foto sigue protegida en el teléfono.' };
+  // límites de ritmo de Google (llegan como 403 o 429): temporales, se reintentan solos
+  if (/RateLimitExceeded|HTTP 429/i.test(msg)) return { kind: 'rate_limit', title: 'Google limitó temporalmente las solicitudes', help: 'Se reintentará automáticamente en unos minutos; no hace falta hacer nada.' };
+  if (/HTTP 5\d\d|backendError|internalError/i.test(msg)) return { kind: 'server', title: 'Google no respondió', help: 'Error temporal del servicio. Se reintentará automáticamente.' };
   if (/HTTP 403|permiso|permission|insufficient|forbidden/i.test(msg)) return { kind: 'permission', title: 'Sin permiso en Google Drive o Sheets', help: 'Su cuenta no puede escribir en la carpeta o la hoja. Pida acceso de edición; no se perdió nada.' };
-  if (/Sin conexi[oó]n|Red:|network|Failed to fetch|conexi[oó]n perdida|offline/i.test(msg)) return { kind: 'offline', title: 'Sin conexión', help: 'Se reintentará automáticamente al volver la conexión.' };
-  if (/HTTP (429|5\d\d)/.test(msg)) return { kind: 'server', title: 'Google no respondió', help: 'Error temporal del servicio. Se reintentará automáticamente.' };
-  return { kind: 'upload', title: 'Fallo de subida', help: 'No se pudo completar la subida. Reintente; no se crearán registros duplicados.' };
+  if (/Sin conexi[oó]n|Red:|network|Failed to fetch|conexi[oó]n (perdida|se interrumpi)|interrumpi|offline|sesi[oó]n de subida caducada|no avanz[oó]/i.test(msg)) return { kind: 'offline', title: 'La conexión se interrumpió; la subida se reintentará', help: 'Se reanudará automáticamente desde donde quedó, sin duplicar archivos.' };
+  return { kind: 'upload', title: 'No fue posible subir este archivo', help: 'Se reintentará automáticamente; no se crearán registros duplicados. Si persiste, copie el diagnóstico.' };
 }
 
 /** Etapa 3 — copia en Google (Drive + Sheets). «Confirmado» no implica datos verificados. */

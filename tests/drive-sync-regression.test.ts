@@ -12,6 +12,9 @@ import { MockAuth } from '../src/adapters/mock';
 import type { DriveAdapter } from '../src/adapters/contracts';
 import type { EvidenceScan, UserProfile } from '../src/domain/schema';
 import { fakeGoogle } from './support/fake-google';
+import { classifySyncError } from '../src/ui/model';
+/** las pruebas no esperan de verdad entre reintentos */
+const NO_WAIT = async () => undefined;
 
 const USER: UserProfile = { id: 'EDR', name: 'Eder' };
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -24,8 +27,8 @@ async function setup(opts: { mainDrive?: (real: GoogleDriveAdapter, g: ReturnTyp
   const f = (async (i: RequestInfo | URL, init: RequestInit = {}) => hook?.(String(i), init) ?? g.fetch(i, init)) as typeof fetch;
   const auth = new MockAuth([USER]); await auth.signIn('EDR');
   const repo = new CaptureRepo(await openCaptureDB(`drive-reg-${++n}-${Math.random()}`));
-  const realMain = new GoogleDriveAdapter(auth, 'ROOT_MAIN', f);
-  const archive = new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', f);
+  const realMain = new GoogleDriveAdapter(auth, 'ROOT_MAIN', f, undefined, NO_WAIT);
+  const archive = new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', f, undefined, NO_WAIT);
   const sheets = new GoogleSheetsAdapter(auth, 'SHEET', 'CAPTURA_FASE2', f);
   const mk = (main: DriveAdapter) => new SyncEngine(repo, main, sheets, { archive, scannerEnabled: true, backoffMs: () => 0, isOnline: () => true });
   const sync = mk(opts.mainDrive ? opts.mainDrive(realMain, g) : realMain);
@@ -106,12 +109,168 @@ describe('la foto original nunca se publica antes de que el escáner la recorte'
   });
 });
 
+describe('incidente HCT: Drive lleno de la cuenta que sube → carpetas vacías, sin fila; recuperación automática e idempotente', () => {
+  it('reproduce los síntomas sin falso «confirmado» y recupera en las MISMAS carpetas con una fila por capture_uuid', async () => {
+    const { g, repo, sync } = await setup();
+    const HECTOR: UserProfile = { id: 'HCT', name: 'Héctor' };
+    // una captura de Eder ya sincronizada (sus filas no deben cambiar)
+    const eder = await capture(repo, 'cropped');
+    expect(await sync.syncOne(eder)).toBe('confirmed');
+    const ederRow = JSON.stringify(rows(g));
+    // tres capturas de Héctor
+    const hct: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const c = await repo.createCapture(HECTOR, [{ kind: 'card_front', blob: jpeg(`hct-front-${i}`) }, { kind: 'stand', blob: jpeg(`hct-stand-${i}`) }]);
+      await repo.update(c.uuid, (x) => { x.ocr_status = 'EXTRAIDO'; x.fields.company_name = `Demo HCT ${i}`; }, { bump: true });
+      hct.push(c.uuid);
+    }
+    // el Drive de Héctor está lleno: los archivos cuentan en la cuota de quien SUBE (las carpetas no ocupan espacio)
+    g.quotaFull = true;
+    await sync.syncAll({ force: true });
+    const folders = g.files.filter((f) => f.mimeType === FOLDER && /^CF26F2-HCT-/.test(f.name));
+    expect(folders).toHaveLength(6); // carpeta del proveedor + carpeta del respaldo por captura…
+    for (const f of folders) expect(filesIn(g, f.id)).toHaveLength(0); // …ambas VACÍAS, como en Drive real
+    expect(rows(g).filter((r) => r.captured_by === 'Héctor')).toHaveLength(0); // ninguna fila HCT
+    expect(JSON.stringify(rows(g))).toBe(ederRow);
+    for (const u of hct) {
+      const c = (await repo.get(u))!;
+      expect(c.sync_status).toBe('ERROR'); // nunca CONFIRMADO con una carpeta vacía
+      expect(c.sync_error).toMatch(/storageQuotaExceeded/);
+    }
+    const { ledgerRow } = await import('../src/sync/ledger');
+    const before = await Promise.all(hct.map(async (u) => ledgerRow((await repo.get(u))!, await repo.evidences(u), { archive: true, scannerEnabled: true })));
+    for (const l of before) expect(l).toMatchObject({ sync_status: 'ERROR', drive_folder: true, archive_folder: true, main: { uploaded: 0 }, archive: { uploaded: 0 } });
+
+    // Héctor libera espacio: el ciclo AUTOMÁTICO (sin pulsar «Sincronizar») completa todo
+    g.quotaFull = false;
+    await sync.syncAll();
+    const ref = (u: string) => repo.get(u).then((c) => c!);
+    for (const u of hct) {
+      const c = await ref(u);
+      expect(c.sync_status).toBe('CONFIRMADO');
+      expect(filesIn(g, c.remote!.folder_id).length).toBeGreaterThan(0);
+      expect(filesIn(g, c.remote!.archive_folder_id).length).toBeGreaterThan(0);
+    }
+    expect(g.files.filter((f) => f.mimeType === FOLDER && /^CF26F2-HCT-/.test(f.name))).toHaveLength(6); // mismas carpetas, ninguna nueva
+    const hctRows = rows(g).filter((r) => r.captured_by === 'Héctor');
+    expect(hctRows.map((r) => r.capture_uuid).sort()).toEqual([...hct].sort());
+    for (const r of hctRows) expect(r.external_ref).toMatch(/^CF26F2-HCT-/);
+    expect(rows(g).filter((r) => r.captured_by === 'Eder')).toHaveLength(1);
+    // idempotencia: otra pasada no crea archivos ni filas
+    const nFiles = g.files.length, nRows = rows(g).length;
+    await sync.syncAll({ force: true });
+    expect(g.files.length).toBe(nFiles);
+    expect(rows(g).length).toBe(nRows);
+  });
+});
+
+describe('sesión de Google, capturas antiguas y originales', () => {
+  it('la sesión de Google expira a mitad de la subida → ERROR de sesión; al renovarla se completa sin duplicar', async () => {
+    const { g, repo, sync, setHook } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    let n = 0;
+    setHook((url, init) => (init.method === 'PUT' && url.includes('/upload/') && ++n === 1 ? new Response('{}', { status: 401 }) : undefined));
+    expect(await sync.syncOne(uuid)).toBe('auth');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_status).toBe('ERROR');
+    expect(classifySyncError(c.sync_error).kind).toBe('auth');
+    setHook(undefined); // sesión renovada
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    const ids = g.files.filter((f) => f.mimeType !== FOLDER).map((f) => `${f.parents[0]}:${f.appProperties.evidence_id}`);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(rows(g)).toHaveLength(1);
+  });
+
+  it('archivo remoto que NO coincide (tamaño) → la captura queda en ERROR de integridad, sin fila y sin archivo duplicado', async () => {
+    const { g, repo, sync } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    // alguien/algo deja truncado el archivo del anverso en la carpeta del proveedor; se fuerza un reenvío de la captura
+    const front = (await repo.evidences(uuid)).find((e) => e.kind === 'card_front')!;
+    const mainFolder = (await repo.get(uuid))!.remote!.folder_id;
+    const remote = g.files.find((f) => f.appProperties.evidence_id === front.id && f.parents[0] === mainFolder)!;
+    remote.size = 1;
+    await repo.updateEvidence(front.id, { remote_file_id: undefined, remote_url: undefined, uploaded_at: undefined, archive_file_id: undefined, archive_url: undefined, archived_at: undefined });
+    await repo.update(uuid, (x) => { x.fields.notes = 'cambio'; }, { bump: true });
+    const rowsBefore = rows(g).length, filesBefore = g.files.length;
+    expect(await sync.syncOne(uuid)).toBe('failed');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_status).toBe('ERROR');
+    expect(classifySyncError(c.sync_error).kind).toBe('integrity');
+    expect(g.files.length).toBe(filesBefore); // ni duplicado ni borrado
+    expect(rows(g).length).toBe(rowsBefore);
+  });
+
+  it('el error de Google se GUARDA depurado (sin correo, URL de sesión ni token) y el registro técnico no expone ids internos', async () => {
+    const { repo, sync, setHook } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    setHook((url) => (url.includes('/upload/') ? new Response(JSON.stringify({ error: { code: 403, message: 'Denied for hector.demo@example.com at https://www.googleapis.com/upload/drive/v3/files?upload_id=SECRETSESSION123456789012345 Bearer ya29.secretToken', errors: [{ reason: 'insufficientFilePermissions' }] } }), { status: 403 }) : undefined));
+    expect(await sync.syncOne(uuid)).toBe('failed');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_error).toMatch(/Google HTTP 403 insufficientFilePermissions/);
+    for (const leak of ['hector.demo@example.com', 'googleapis.com', 'SECRETSESSION', 'ya29.']) expect(c.sync_error).not.toContain(leak);
+    const audit = JSON.stringify(await repo.audit(uuid));
+    for (const leak of ['hector.demo@example.com', 'SECRETSESSION', 'ya29.']) expect(audit).not.toContain(leak);
+    const { ledgerRow } = await import('../src/sync/ledger');
+    const l = ledgerRow(c, await repo.evidences(uuid), { archive: true, scannerEnabled: true }) as unknown as Record<string, unknown>;
+    expect(l).not.toHaveProperty('device_id');
+    expect(l).not.toHaveProperty('drive_folder_id');
+    expect(l).not.toHaveProperty('archive_folder_id');
+    expect(JSON.stringify(l)).not.toContain(c.device_id);
+    expect(l.device_code).toBe(c.external_ref.split('-')[2]);
+  });
+
+  it('Drive sin md5Checksum → la captura queda PENDIENTE de verificación (ERROR de integridad), sin fila, sin duplicar', async () => {
+    const { g, repo, sync } = await setup();
+    const uuid = await capture(repo, 'not_cropped');
+    g.md5Missing = true;
+    expect(await sync.syncOne(uuid)).toBe('failed');
+    const c = (await repo.get(uuid))!;
+    expect(c.sync_status).toBe('ERROR');
+    expect(classifySyncError(c.sync_error).kind).toBe('integrity');
+    expect(rows(g)).toHaveLength(0);
+    // cuando Drive vuelve a informar el MD5, se verifica el MISMO archivo (no se sube otro) y se confirma
+    g.md5Missing = false;
+    const before = g.files.filter((f) => f.mimeType !== FOLDER).length;
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    const ids = g.files.filter((f) => f.mimeType !== FOLDER).map((f) => `${f.parents[0]}:${f.appProperties.evidence_id}`);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBeGreaterThanOrEqual(before);
+    expect(rows(g)).toHaveLength(1);
+  });
+
+  it('captura ANTIGUA (sin sha256, sin escaneo, sin decisión de recorte) se sincroniza igual y una sola vez', async () => {
+    const { g, repo, sync } = await setup();
+    const c = await repo.createCapture(USER, [{ kind: 'card_front', blob: jpeg('legacy-front') }]);
+    await repo.update(c.uuid, (x) => { x.ocr_status = 'EXTRAIDO'; x.app_version = '1.0.0'; }, { bump: true });
+    const [ev] = await repo.evidences(c.uuid);
+    // como la escribía la v1.0: sin sha256 ni escaneo (escritura directa en la base de PRUEBA)
+    await (repo as unknown as { db: { put(s: string, v: unknown): Promise<unknown> } }).db.put('evidences', { ...ev, sha256: undefined, scan: undefined });
+    expect(await sync.syncOne(c.uuid)).toBe('confirmed');
+    expect(rows(g).map((r) => r.capture_uuid)).toEqual([c.uuid]);
+  });
+
+  it('los ORIGINALES llegan al respaldo byte a byte y el teléfono los conserva intactos', async () => {
+    const { g, repo, sync } = await setup();
+    const uuid = await capture(repo, 'cropped');
+    const orig = (await repo.evidences(uuid)).find((e) => e.kind === 'card_front' && e.role === 'original')!;
+    const before = new Uint8Array(await orig.blob.arrayBuffer());
+    expect(await sync.syncOne(uuid)).toBe('confirmed');
+    const af = (await repo.get(uuid))!.remote!.archive_folder_id;
+    const archived = g.files.find((f) => f.parents[0] === af && f.appProperties.evidence_id === orig.id)!;
+    expect([...archived.bytes!]).toEqual([...before]);
+    const after = new Uint8Array(await (await repo.getEvidence(orig.id))!.blob.arrayBuffer());
+    expect([...after]).toEqual([...before]);
+  });
+});
+
 describe('reintentos: sin archivos ni filas duplicadas', () => {
   it('fallo a mitad de la subida → ERROR (no CONFIRMADO); el reintento completa sin duplicar', async () => {
     const { g, repo, sync, setHook } = await setup();
     const uuid = await capture(repo, 'not_cropped');
     let uploads = 0;
-    setHook((url) => (url.includes('/upload/') && ++uploads === 2 ? new Response('{}', { status: 503 }) : undefined));
+    // Drive deja de responder a mitad de las subidas (la subida reanudable reintenta cada bloque; aquí el fallo persiste)
+    setHook((url) => (url.includes('/upload/') && ++uploads >= 2 ? new Response('{}', { status: 503 }) : undefined));
     expect(await sync.syncOne(uuid)).toBe('failed');
     expect((await repo.get(uuid))!.sync_status).toBe('ERROR');
     expect(rows(g)).toHaveLength(0); // ninguna fila con evidencias a medias
@@ -218,7 +377,7 @@ describe('producción: reparaciones de enlaces solo con aprobación del operador
     const auth = new MockAuth([USER]); await auth.signIn('EDR');
     const app = await CaptureApp.create({
       dbName: `drive-prod-${++n}-${Math.random()}`, auth, ocr: new MockOCRAdapter({ delayMs: 1 }), resources: false, syncDebounceMs: 60_000,
-      drive: new GoogleDriveAdapter(auth, 'ROOT_MAIN', g.fetch), archiveDrive: new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', g.fetch),
+      drive: new GoogleDriveAdapter(auth, 'ROOT_MAIN', g.fetch, undefined, NO_WAIT), archiveDrive: new GoogleDriveAdapter(auth, 'ROOT_ARCHIVE', g.fetch, undefined, NO_WAIT),
       sheets: new GoogleSheetsAdapter(auth, 'SHEET', 'CAPTURA_FASE2', g.fetch), autoRepairLinks: false,
     });
     try {

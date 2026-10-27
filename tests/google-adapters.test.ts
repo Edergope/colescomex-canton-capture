@@ -1,72 +1,21 @@
 // Verifica la FORMA de las peticiones REST y la idempotencia de los adaptadores Google contra un
 // emulador mínimo de Drive v3 / Sheets v4. No sustituye la prueba real que debe hacer Antigravity.
 import { describe, expect, it } from 'vitest';
-import { GoogleDriveAdapter, GoogleSheetsAdapter, col } from '../src/adapters/google';
+import { GoogleDriveAdapter, GoogleSheetsAdapter, IntegrityError, col } from '../src/adapters/google';
 import { MockAuth } from '../src/adapters/mock';
 import { AuthRequiredError, TransientRemoteError } from '../src/adapters/contracts';
+import { fakeGoogle } from './support/fake-google';
+/** las pruebas no esperan de verdad entre reintentos */
+const NO_WAIT = async () => undefined;
+import { classifySyncError } from '../src/ui/model';
 
-function fakeGoogle() {
-  const files: { id: string; name: string; parents: string[]; mimeType: string; appProperties: Record<string, string>; size: number }[] = [];
-  let grid: string[][] = [];
-  const log: string[] = [];
-  let failNext: number | null = null;
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
-  const parseA1 = (r: string) => {
-    const m = decodeURIComponent(r).match(/!([A-Z]*)(\d*)(?::([A-Z]*)(\d*))?/)!;
-    const toN = (c: string) => [...c].reduce((s, ch) => s * 26 + ch.charCodeAt(0) - 64, 0);
-    return { c1: m[1] ? toN(m[1]) : 1, r1: m[2] ? Number(m[2]) : 1, c2: m[3] ? toN(m[3]) : m[1] ? toN(m[1]) : 999, r2: m[4] ? Number(m[4]) : m[3] === undefined && m[2] ? Number(m[2]) : 99999 };
-  };
-  const fetchImpl = async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const url = new URL(String(input)); const method = init.method ?? 'GET';
-    log.push(`${method} ${url.pathname}`);
-    if (!(init.headers as Record<string, string>)?.Authorization?.startsWith('Bearer ')) return json({ error: 'no auth' }, 401);
-    if (failNext) { const s = failNext; failNext = null; return json({}, s); }
-    if (url.pathname === '/drive/v3/files' && method === 'GET') {
-      const qs = url.searchParams.get('q')!;
-      const props = [...qs.matchAll(/key='([^']+)' and value='([^']+)'/g)];
-      const parent = qs.match(/'([^']+)' in parents/)?.[1];
-      const out = files.filter((f) => props.every(([, k, v]) => f.appProperties[k] === v) && (!parent || f.parents.includes(parent)));
-      return json({ files: out.map((f) => ({ id: f.id, webViewLink: `https://drive/${f.id}` })) });
-    }
-    if (url.pathname === '/drive/v3/files' && method === 'POST') {
-      const b = JSON.parse(String(init.body)); const f = { ...b, id: `F${files.length + 1}`, size: 0 }; files.push(f);
-      return json({ id: f.id, webViewLink: `https://drive/${f.id}` });
-    }
-    if (url.pathname === '/upload/drive/v3/files') {
-      expect(url.searchParams.get('uploadType')).toBe('multipart');
-      const text = await (init.body as Blob).text();
-      const meta = JSON.parse(text.split('\r\n\r\n')[1].split('\r\n')[0]);
-      const f = { ...meta, id: `F${files.length + 1}`, size: text.length }; files.push(f);
-      return json({ id: f.id, webViewLink: `https://drive/${f.id}` });
-    }
-    const sm = url.pathname.match(/\/v4\/spreadsheets\/[^/]+\/values\/(.+?)(:(?:append|clear))?$/);
-    if (sm) {
-      const a = parseA1(sm[1]);
-      if (method === 'GET') {
-        const vals = grid.slice(a.r1 - 1, a.r2).map((r) => r.slice(a.c1 - 1, a.c2));
-        return json({ values: vals.length ? vals : undefined });
-      }
-      if (sm[2] === ':clear') {
-        if (grid[a.r1 - 1]) grid[a.r1 - 1] = [];
-        return json({ clearedRange: sm[1] });
-      }
-      const body = JSON.parse(String(init.body)) as { values: (string | null)[][] };
-      expect(url.searchParams.get('valueInputOption')).toBe('RAW');
-      if (sm[2] === ':append') { grid.push(body.values[0].map((v) => v ?? '')); return json({ updates: { updatedRange: `'T'!A${grid.length}:Z${grid.length}` } }); }
-      const r = grid[a.r1 - 1] ?? (grid[a.r1 - 1] = []);
-      body.values[0].forEach((v, i) => { if (v !== null) r[a.c1 - 1 + i] = v; });
-      return json({});
-    }
-    return json({ error: `ruta no emulada ${url.pathname}` }, 404);
-  };
-  return { files, get grid() { return grid; }, set grid(g) { grid = g; }, log, fetch: fetchImpl as typeof fetch, failWith: (s: number) => { failNext = s; } };
-}
+// emulador compartido (subida reanudable, motivos de error reales de Google)
 
 async function authed() { const a = new MockAuth([{ id: 'EDR', name: 'Eder' }]); await a.signIn('EDR'); return a; }
 
 describe('GoogleDriveAdapter', () => {
   it('carpeta y archivos idempotentes por appProperties', async () => {
-    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     const f1 = await drive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     const f2 = await drive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     expect(f1.folderId).toBe(f2.folderId);
@@ -79,8 +28,8 @@ describe('GoogleDriveAdapter', () => {
   });
   it('respeta el ámbito de carpeta padre y no confunde archivo del respaldo con carpeta principal', async () => {
     const g = fakeGoogle();
-    const mainDrive = new GoogleDriveAdapter(await authed(), 'ROOT_MAIN', g.fetch);
-    const archiveDrive = new GoogleDriveAdapter(await authed(), 'ROOT_ARCHIVE', g.fetch);
+    const mainDrive = new GoogleDriveAdapter(await authed(), 'ROOT_MAIN', g.fetch, undefined, NO_WAIT);
+    const archiveDrive = new GoogleDriveAdapter(await authed(), 'ROOT_ARCHIVE', g.fetch, undefined, NO_WAIT);
     const mainFolder = await mainDrive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     const archiveFolder = await archiveDrive.ensureCaptureFolder({ capture_uuid: 'u-1', external_ref: 'CF26F2-EDR-AB12-0001' });
     expect(mainFolder.folderId).not.toBe(archiveFolder.folderId);
@@ -95,11 +44,157 @@ describe('GoogleDriveAdapter', () => {
     expect(g.files.find((f) => f.id === archUp.fileId)!.parents).toEqual([archiveFolder.folderId]);
   });
   it('clasifica errores: 401 → reautenticar, 503 → transitorio', async () => {
-    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch);
+    const g = fakeGoogle(); const drive = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
     g.failWith(401);
     await expect(drive.ensureCaptureFolder({ capture_uuid: 'u', external_ref: 'r' })).rejects.toBeInstanceOf(AuthRequiredError);
     g.failWith(503);
     await expect(drive.ensureCaptureFolder({ capture_uuid: 'u', external_ref: 'r' })).rejects.toBeInstanceOf(TransientRemoteError);
+  });
+});
+
+describe('GoogleDriveAdapter — subida reanudable y motivos reales de error (incidente HCT)', () => {
+  const photo = (n: number) => { const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = (i * 31 + 7) & 255; return new Blob([b], { type: 'image/jpeg' }); };
+  const up = (blob: Blob, id = 'ev-1') => ({ evidence_id: id, capture_uuid: 'cap-1', external_ref: 'CF26F2-HCT-CCCB-0001', kind: 'card_front' as const, file_name: 'CF26F2-HCT-CCCB-0001_01_card_front.jpg', mime: 'image/jpeg', blob });
+  const same = async (a: Uint8Array | undefined, b: Blob) => { const x = new Uint8Array(await b.arrayBuffer()); return !!a && a.length === x.length && a.every((v, i) => v === x[i]); };
+
+  it('foto grande (> 5 MB, como las de cámaras de muchos megapíxeles) se sube por bloques con los bytes idénticos', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const big = photo(6 * 1024 * 1024 + 123);
+    const r = await d.uploadEvidence('ROOT', up(big));
+    const f = g.files.find((x) => x.id === r.fileId)!;
+    expect(f.size).toBe(big.size);
+    expect(await same(f.bytes, big)).toBe(true);
+    expect(g.log.filter((l) => l === 'PUT /upload/drive/v3/files')).toHaveLength(2); // dos bloques de 4 MB
+  });
+
+  it('corte de red a mitad: continúa desde el último byte confirmado, sin archivo duplicado', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    const blob = photo(1024 * 1024 + 9);
+    g.dropChunks(2);
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1);
+    expect(await same(g.files.find((x) => x.id === r.fileId)!.bytes, blob)).toBe(true);
+  });
+
+  it('Drive lleno (403 storageQuotaExceeded): error PERMANENTE con su motivo, nunca «sin permiso»', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.quotaFull = true;
+    const err = (await d.uploadEvidence('ROOT', up(photo(1000))).then(() => new Error('no falló'), (e: Error) => e));
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TransientRemoteError);
+    expect(err.message).toMatch(/Google HTTP 403 storageQuotaExceeded/);
+    expect(classifySyncError(err.message)).toMatchObject({ kind: 'quota', title: 'El almacenamiento de su cuenta de Google está lleno' });
+    expect(classifySyncError('Google HTTP 403 insufficientFilePermissions: The user does not have sufficient permissions').kind).toBe('permission');
+  });
+
+  it('sesión reanudable caducada (404) a mitad: abre otra desde cero, sin archivo duplicado y con los bytes idénticos', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    const blob = photo(900 * 1024);
+    g.expireSessionNext();
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    const mine = g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1');
+    expect(mine).toHaveLength(1);
+    expect(mine[0].id).toBe(r.fileId);
+    expect(await same(mine[0].bytes, blob)).toBe(true);
+  });
+
+  it('el último bloque llega pero se pierde la respuesta: se consulta el estado y NO se vuelve a subir', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    g.loseFinalResponse();
+    const r = await d.uploadEvidence('ROOT', up(photo(600 * 1024)));
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1').map((x) => x.id)).toEqual([r.fileId]);
+  });
+
+  it('HTTP 429 en bloques: espera exponencial con jitter y completa', async () => {
+    const g = fakeGoogle(); const waits: number[] = [];
+    const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, async (ms) => { waits.push(ms); });
+    g.rateLimitChunks(3);
+    const blob = photo(700 * 1024);
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    expect(await same(g.files.find((x) => x.id === r.fileId)!.bytes, blob)).toBe(true);
+    expect(waits).toHaveLength(3);
+    waits.forEach((w, i) => { expect(w).toBeGreaterThanOrEqual(1000 * 2 ** i); expect(w).toBeLessThan(1000 * 2 ** i + 1000); });
+  });
+
+  it('429 persistente: se rinde como TRANSITORIO (lo retoma la siguiente sincronización), sin archivo a medias registrado', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, 256 * 1024, NO_WAIT);
+    g.rateLimitChunks(50);
+    await expect(d.uploadEvidence('ROOT', up(photo(700 * 1024)))).rejects.toBeInstanceOf(TransientRemoteError);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(0);
+  });
+
+  it('permiso REAL insuficiente (403 insufficientFilePermissions): permanente y rotulado como permiso', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.errorNext(403, 'insufficientFilePermissions', 'The user does not have sufficient permissions for this file.');
+    const err = await d.ensureCaptureFolder({ capture_uuid: 'cap-1', external_ref: 'X' }).then(() => new Error('no falló'), (e: Error) => e);
+    expect(err).not.toBeInstanceOf(TransientRemoteError);
+    expect(classifySyncError(err.message).kind).toBe('permission');
+  });
+
+  it('INTEGRIDAD: archivo reutilizado por evidence_id solo se confirma con tamaño y sha256 coincidentes', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const blob = photo(5000);
+    const first = await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-A' });
+    // segunda pasada: se reutiliza (no se sube otra vez) porque coincide
+    expect((await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-A' })).fileId).toBe(first.fileId);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1);
+    // el archivo remoto quedó truncado: NO se confirma, no se crea otro y no se borra nada
+    g.files.find((x) => x.id === first.fileId)!.size = 4000;
+    const err = await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-A' }).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(err.message).toMatch(/no coincide/);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1);
+    // otra versión de la evidencia (sha256 distinto): tampoco se confirma
+    g.files.find((x) => x.id === first.fileId)!.size = 5000;
+    await expect(d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-B' })).rejects.toBeInstanceOf(IntegrityError);
+  });
+
+  it('INTEGRIDAD: respuesta sin tamaño → se consultan metadatos; si tampoco lo informan, NO se confirma', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.omitSizeNext();
+    const r = await d.uploadEvidence('ROOT', up(photo(3000)));
+    expect(g.log).toContain(`GET /drive/v3/files/${r.fileId}`); // verificado por metadatos
+    g.omitSizeNext(); g.metadataWithoutSize = true;
+    const err = await d.uploadEvidence('ROOT', up(photo(3000), 'ev-2')).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(classifySyncError(err.message).kind).toBe('integrity');
+  });
+
+  it('INTEGRIDAD INDEPENDIENTE: mismo tamaño pero contenido distinto → el md5Checksum de Drive lo detecta; no se confirma ni se duplica', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const blob = photo(4096);
+    const first = await d.uploadEvidence('ROOT', up(blob));
+    const stored = g.files.find((x) => x.id === first.fileId)!;
+    stored.bytes = stored.bytes!.slice(); stored.bytes[100] ^= 0xff; // alterado en Drive, MISMO tamaño
+    const err = await d.uploadEvidence('ROOT', up(blob)).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(err.message).toMatch(/MD5/);
+    expect(g.files.filter((x) => x.appProperties?.evidence_id === 'ev-1')).toHaveLength(1); // ni duplicado ni borrado
+  });
+
+  it('INTEGRIDAD: sin md5Checksum de Drive el contenido NO es verificable → no se confirma (aunque el tamaño coincida)', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.md5Missing = true;
+    const err = await d.uploadEvidence('ROOT', up(photo(2048))).then(() => new Error('confirmado'), (e: Error) => e);
+    expect(err).toBeInstanceOf(IntegrityError);
+    expect(err.message).toMatch(/no se puede verificar el contenido/);
+    expect(classifySyncError(err.message).kind).toBe('integrity');
+    expect(g.log).toContain(`GET /drive/v3/files/${g.files.find((x) => x.appProperties?.evidence_id === 'ev-1')!.id}`); // intentó los metadatos
+  });
+
+  it('INTEGRIDAD: archivo de una versión anterior (sin sha256 en appProperties) se verifica por tamaño y MD5', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    const blob = photo(3333);
+    const r = await d.uploadEvidence('ROOT', up(blob));
+    delete g.files.find((x) => x.id === r.fileId)!.appProperties.sha256;
+    expect((await d.uploadEvidence('ROOT', { ...up(blob), sha256: 'sha-cualquiera' })).fileId).toBe(r.fileId);
+  });
+
+  it('límite de ritmo de Google (403 userRateLimitExceeded) es TRANSITORIO: se reintenta solo', async () => {
+    const g = fakeGoogle(); const d = new GoogleDriveAdapter(await authed(), 'ROOT', g.fetch, undefined, NO_WAIT);
+    g.errorNext(403, 'userRateLimitExceeded', 'User rate limit exceeded.');
+    await expect(d.ensureCaptureFolder({ capture_uuid: 'cap-1', external_ref: 'X' })).rejects.toBeInstanceOf(TransientRemoteError);
+    expect(classifySyncError('Google HTTP 403 userRateLimitExceeded: User rate limit exceeded.').kind).toBe('rate_limit');
   });
 });
 

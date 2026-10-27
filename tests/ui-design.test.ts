@@ -71,8 +71,18 @@ describe('modelo de presentación', () => {
     expect(classifySyncError('Sheets HTTP 503').kind).toBe('server');
     expect(classifySyncError('Sincronización bloqueada: Falta VITE_SPREADSHEET_ID').kind).toBe('config');
     expect(classifySyncError('algo raro').kind).toBe('upload');
-    expect(classifySyncError('Sin conexión').title).toBe('Sin conexión');
-    expect(classifySyncError('Reconecta tu cuenta').title).toBe('La sesión de Google expiró');
+    expect(classifySyncError('Sin conexión').title).toBe('La conexión se interrumpió; la subida se reintentará');
+    expect(classifySyncError('Reconecta tu cuenta').title).toBe('La sesión de Google expiró; reconecte su cuenta');
+    // los mensajes de la orden P0, uno por causa real (nunca todo 403 como «permiso»)
+    expect(classifySyncError("Google HTTP 403 storageQuotaExceeded: The user's Drive storage quota has been exceeded.").title).toBe('El almacenamiento de su cuenta de Google está lleno');
+    expect(classifySyncError('Google HTTP 429 rateLimitExceeded: Rate Limit Exceeded').title).toBe('Google limitó temporalmente las solicitudes');
+    expect(classifySyncError('Google HTTP 403 userRateLimitExceeded: User rate limit exceeded').kind).toBe('rate_limit');
+    expect(classifySyncError('Google HTTP 404: sesión de subida caducada').kind).toBe('offline'); // sesión de SUBIDA, no de Google
+    expect(classifySyncError('La conexión se interrumpió durante la subida; se reintentará').kind).toBe('offline');
+    expect(classifySyncError('El archivo en Drive no coincide: x.jpg tiene 10 bytes y la foto 20; no se confirma').kind).toBe('integrity');
+    expect(classifySyncError('Drive no informó el tamaño de x.jpg: no se puede verificar; no se confirma').kind).toBe('integrity');
+    expect(classifySyncError('Error inesperado').title).toBe('No fue posible subir este archivo');
+    expect(classifySyncError('Google HTTP 403 insufficientFilePermissions: no').kind).toBe('permission');
   });
 
   it('revisión: solo campos dudosos no bloqueados; nada bloqueado por una persona vuelve a pedir revisión', () => {

@@ -42,14 +42,14 @@ class FakeScanner implements DocumentScanner {
 
 const apps: CaptureApp[] = [];
 afterEach(() => { apps.splice(0).forEach((a) => a.stop()); });
-async function makeApp(opts: { archive?: boolean; scanner?: FakeScanner; ocr?: MockOCRAdapter } = {}) {
+async function makeApp(opts: { archive?: boolean; scanner?: FakeScanner; ocr?: MockOCRAdapter; debounceMs?: number } = {}) {
   const net = new MockNetwork();
   const drive = new MockDrive(net), sheets = new MockSheets(net), archive = opts.archive ? new MockDrive(net, 'ORIGINALES') : undefined;
   const auth = new MockAuth(USERS);
   const scanner = opts.scanner ?? new FakeScanner();
   const ocr = opts.ocr ?? new MockOCRAdapter();
   const app = await CaptureApp.create({ dbName: `scan-${Math.random()}`, auth, ocr, drive, sheets, scanner, archiveDrive: archive,
-    ocrOptions: { retryDelayMs: () => 5 }, syncOptions: { backoffMs: () => 0, isOnline: () => net.online }, syncDebounceMs: 60_000 });
+    ocrOptions: { retryDelayMs: () => 5 }, syncOptions: { backoffMs: () => 0, isOnline: () => net.online }, syncDebounceMs: opts.debounceMs ?? 60_000 });
   await auth.signIn('EDR');
   apps.push(app);
   return { app, drive, sheets, archive, scanner, ocr, net };
@@ -161,6 +161,20 @@ describe('escáner + núcleo', () => {
     expect(cap.fields.company_name).toBe(X.company_name); // el OCR sí se hizo (orientado)
     expect([...drive.files.values()].map((f) => f.name).sort()).toEqual([`${c.external_ref}_01_card_front.jpg`, `${c.external_ref}_02_card_back.jpg`]);
     expect(sheets.asObjects()[0].review_fields).toContain('escaneo');
+  });
+
+  it('renovar la sesión de Google reanuda AL MOMENTO las capturas en espera tras un error (sin pulsar «Sincronizar»)', async () => {
+    const { app, net, sheets } = await makeApp({ debounceMs: 5 });
+    const c = await app.saveCapture([{ kind: 'card_front', blob: photo({ status: 'ok', label: 0, lines: FRONT }) }]);
+    await app.ocr.idle();
+    net.online = false;
+    await app.syncNow(true);
+    // el error deja la captura esperando su próximo intento (minutos)
+    await app.repo.update(c.uuid, (x) => { x.sync_status = 'ERROR'; x.sync_error = 'La sesión de Google expiró'; x.sync_next_attempt_at = Date.now() + 10 * 60_000; });
+    net.online = true;
+    await app.signIn('EDR');
+    await expect.poll(async () => (await app.repo.get(c.uuid))!.sync_status, { timeout: 3000 }).toBe('CONFIRMADO');
+    expect(sheets.asObjects().filter((r) => r.capture_uuid === c.uuid)).toHaveLength(1);
   });
 
   it('recorte aprobado MATERIALIZADO: el documento existe al guardar; el final lo sustituye in situ y el OCR lee el recorte', async () => {

@@ -100,7 +100,10 @@ function updateSection(ctx: Ctx) {
         st?.phase === 'ready' ? h('button', { class: 'btn sm primary', type: 'button', id: 'btn-apply-update', onClick: () => void ctx.applyUpdateNow() }, 'Actualizar ahora') : null,
         h('button', { class: 'btn sm ghost', type: 'button', id: 'btn-copy-diag', onClick: async () => {
           const all = await ctx.app.repo.list();
-          const d = await (up?.diagnostics({ captures: all.length, pendingSync: all.filter((c) => c.sync_status !== 'CONFIRMADO').length }) ?? Promise.resolve({ app: { version: APP_VERSION, build: APP_BUILD } }));
+          // incluye el registro técnico de TODAS las capturas: estado, archivos y error real (sin datos de proveedores)
+          const sync = await ctx.app.syncLedger(false);
+          const extra = { captures: all.length, pendingSync: all.filter((c) => c.sync_status !== 'CONFIRMADO').length, user: ctx.user?.id, sync };
+          const d = await (up?.diagnostics(extra) ?? Promise.resolve({ app: { version: APP_VERSION, build: APP_BUILD }, ...extra }));
           const text = JSON.stringify(d, null, 2);
           pre.textContent = text; det.open = true;
           try { await navigator.clipboard.writeText(text); toast('Diagnóstico copiado (sin datos personales)'); } catch { toast('Diagnóstico mostrado abajo'); }
